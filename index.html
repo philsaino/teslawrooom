@@ -88,66 +88,68 @@ let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
 let gear = 1, throttle = 0, lastSpeed = 0, lastThrottle = 0, lastTime = performance.now();
 let geoWatchId = null;
 
-// Precarica i 6 loop WAV
+// Precarica i 6 loop WAV tramite arrayBuffer fetch pulito
+let rawAudioArrayBuffers = [];
 async function preloadSamples() {
-  const AC = window.AudioContext || window.webkitAudioContext;
-  actx = new AC();
-
   try {
     const promises = sampleFiles.map(async (file) => {
       const res = await fetch(file);
-      const arr = await res.arrayBuffer();
-      return await actx.decodeAudioData(arr);
+      if (!res.ok) throw new Error(`HTTP ${res.status} caricando ${file}`);
+      return await res.arrayBuffer();
     });
-    audioBuffers = await Promise.all(promises);
+    rawAudioArrayBuffers = await Promise.all(promises);
 
     const btn = document.getElementById('power-btn');
     btn.disabled = false;
     btn.textContent = 'AVVIA MOTORE';
-    document.getElementById('diag').textContent = 'Campioni caricati. Premi AVVIA.';
+    document.getElementById('diag').textContent = 'Campioni pronti. Premi AVVIA.';
   } catch (err) {
-    document.getElementById('diag').textContent = 'Errore fetch campioni: ' + err.message;
+    document.getElementById('diag').textContent = 'Errore download suoni: ' + err.message;
   }
 }
 preloadSamples();
 
-function initAudioGraph() {
+async function initAudioGraph() {
+  if (!actx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    actx = new AC();
+  }
+  if (actx.state === 'suspended') {
+    await actx.resume();
+  }
+
+  // Decodifica i buffer dentro il contesto audio sbloccato dal tocco iOS
+  if (audioBuffers.length === 0) {
+    document.getElementById('diag').textContent = 'Decodifica audio in corso...';
+    for (const raw of rawAudioArrayBuffers) {
+      // slice per conservare il buffer originale in caso di restart
+      const decoded = await actx.decodeAudioData(raw.slice(0));
+      audioBuffers.push(decoded);
+    }
+  }
+
   masterGain = actx.createGain();
-  masterGain.gain.value = 0.8;
-
-  // Modulatore AM a 5 impulsi per ciclo (timbro 5 cilindri / RS)
-  warbleGain = actx.createGain();
-  warbleGain.gain.value = 0.85;
-
-  warbleOsc = actx.createOscillator();
-  warbleOsc.type = 'sawtooth';
-  const warbleDepth = actx.createGain();
-  warbleDepth.gain.value = 0.15;
-  warbleOsc.connect(warbleDepth);
-  warbleDepth.connect(warbleGain.gain);
-  warbleOsc.start();
+  masterGain.gain.setValueAtTime(0.8, actx.currentTime);
 
   sourceNodes = [];
   gainNodes = [];
 
-  audioBuffers.forEach((buf, i) => {
+  audioBuffers.forEach((buf) => {
     const src = actx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
 
     const g = actx.createGain();
-    // Inizializza tutti muti a 0 per evitare sovrapposizioni allo start
     g.gain.setValueAtTime(0, actx.currentTime);
 
     src.connect(g);
-    g.connect(warbleGain);
+    g.connect(masterGain);
 
     sourceNodes.push(src);
     gainNodes.push(g);
     src.start();
   });
 
-  warbleGain.connect(masterGain);
   masterGain.connect(actx.destination);
 }
 
@@ -225,10 +227,6 @@ function updateAudio(rpm, load) {
       sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
     });
   }
-
-  // Frequenza del modulatore warble: 5 cilindri 4T = (RPM / 60) * 2.5 Hz
-  const warbleFreq = Math.max(10, (rpm / 60) * 2.5);
-  warbleOsc.frequency.setTargetAtTime(warbleFreq, t, ramp);
 }
 
 function updatePhysics(spd) {
@@ -304,13 +302,21 @@ function startGps() {
 const pBtn = document.getElementById('power-btn');
 pBtn.addEventListener('click', async () => {
   if (!isRunning) {
-    if (actx.state === 'suspended') await actx.resume();
-    initAudioGraph();
-    startGps();
-    isRunning = true;
-    pBtn.textContent = 'SPEGNI MOTORE';
-    pBtn.classList.add('stop');
-    document.getElementById('diag').textContent = 'Motore a campioni attivo con modulazione 5 cilindri.';
+    pBtn.disabled = true;
+    pBtn.textContent = 'AVVIO IN CORSO...';
+    try {
+      await initAudioGraph();
+      startGps();
+      isRunning = true;
+      pBtn.textContent = 'SPEGNI MOTORE';
+      pBtn.classList.add('stop');
+      pBtn.disabled = false;
+      document.getElementById('diag').textContent = 'Motore attivo.';
+    } catch (e) {
+      pBtn.disabled = false;
+      pBtn.textContent = 'AVVIA MOTORE';
+      document.getElementById('diag').textContent = 'Errore avvio: ' + e.message;
+    }
   } else {
     sourceNodes.forEach(s => { try { s.stop(); } catch(e){} });
     sourceNodes = [];
