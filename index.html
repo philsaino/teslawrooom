@@ -214,25 +214,26 @@ header{
 <div class="dashboard-controls">
   <div class="mode-toggle">
     <button class="mode-opt active" id="btn-ev-mode">MONOMARCIA EV (NATIVO TESLA)</button>
-    <button class="mode-opt" id="btn-gear-mode">CAMBIO VIRTUAL (1-6 MARCE)</button>
+    <button class="mode-opt" id="btn-gear-mode">CAMBIO VIRTUAL (1-8 MARCE)</button>
   </div>
 
   <button id="power-btn" class="btn-power" disabled>CARICAMENTO AUDIO...</button>
 
   <div class="sim-box">
     <span>TEST BANCO:</span>
-    <input type="range" id="sim-slider" min="0" max="220" value="0">
-    <span id="sim-spd" style="min-width:50px">0 km/h</span>
+    <input type="range" id="sim-slider" min="0" max="260" value="0">
+    <span id="sim-spd" style="min-width:65px">0 km/h</span>
   </div>
 
   <div class="status-line" id="diag">Download campioni...</div>
 </div>
 
 <script>
-// ponytail: supporto doppio (EV monomarcia continuo vs cambio virtuale) con UI grande per schermo Tesla
+// ponytail: supporto doppio (EV monomarcia continuo vs cambio virtuale 8 marce)
 const IDLE_RPM = 800, MAX_RPM = 7500;
-const ratios = [0, 3.4, 2.1, 1.45, 1.1, 0.85, 0.7];
-const finalDrive = 3.9;
+// Rapporti cambio 8 marce (stile ZF 8HP)
+const ratios = [0, 4.71, 3.14, 2.10, 1.67, 1.28, 1.00, 0.84, 0.67];
+const finalDrive = 3.15;
 
 const sampleRpmPoints = [800, 1800, 2800, 4000, 5500, 7200];
 const sampleFiles = [
@@ -363,18 +364,21 @@ function updatePhysics(spd) {
     throttle = 0;
   } else {
     if (driveMode === 'ev') {
-      // Monomarcia EV: l'RPM sale linearmente con la velocita da 0 a 220 km/h (da 800 a 7500 RPM)
-      const ratioEv = (spd / 200); // 200 km/h = limitatore
-      targetRpm = IDLE_RPM + ratioEv * (MAX_RPM - IDLE_RPM);
-      targetRpm = Math.min(MAX_RPM, targetRpm);
+      // Curva EV ricalibrata: progressiva ma non strillata a 7500. A 130 km/h ~3200 RPM, a 230 km/h ~5000 RPM.
+      // Modello con esponente 0.72 per corpo ai bassi e allungo rilassato agli alti
+      const normalizedSpeed = Math.min(260, spd) / 230;
+      targetRpm = IDLE_RPM + Math.pow(normalizedSpeed, 0.72) * 4200;
+      targetRpm = Math.min(5800, targetRpm);
     } else {
-      // Cambio termico simulato (1-6)
-      if (spd < 25) gear = 1;
-      else if (spd < 50) gear = 2;
-      else if (spd < 85) gear = 3;
-      else if (spd < 125) gear = 4;
-      else if (spd < 165) gear = 5;
-      else gear = 6;
+      // Cambio ZF 8 marce simulato (1-8)
+      if (spd < 20) gear = 1;
+      else if (spd < 42) gear = 2;
+      else if (spd < 70) gear = 3;
+      else if (spd < 100) gear = 4;
+      else if (spd < 135) gear = 5;
+      else if (spd < 175) gear = 6;
+      else if (spd < 215) gear = 7;
+      else gear = 8;
 
       const wheelCircMeters = 2.05;
       const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
