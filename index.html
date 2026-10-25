@@ -41,6 +41,19 @@ header{display:flex;justify-content:space-between;width:100%;max-width:600px;fon
 <div class="controls">
   <button id="power-btn" class="btn" disabled>CARICAMENTO AUDIO...</button>
 
+  <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#aaa">
+    <label for="mode-select">Modalita audio:</label>
+    <select id="mode-select" style="background:#222;color:#fff;border:1px solid #444;padding:6px;border-radius:6px">
+      <option value="auto">Crossfade dinamico (tutti)</option>
+      <option value="0">Loop 0 (Idle / Minimo)</option>
+      <option value="1">Loop 1 (Bassi RPM)</option>
+      <option value="2">Loop 2 (Medio-Bassi)</option>
+      <option value="3">Loop 3 (Medi)</option>
+      <option value="4">Loop 4 (Medio-Alti)</option>
+      <option value="5">Loop 5 (Alti RPM)</option>
+    </select>
+  </div>
+
   <div class="sim">
     <label>Simulatore velocita: <span id="sim-spd">0</span> km/h</label>
     <input type="range" id="sim-slider" min="0" max="220" value="0">
@@ -70,6 +83,7 @@ let actx = null, isRunning = false;
 let audioBuffers = [];
 let sourceNodes = [], gainNodes = [];
 let masterGain, warbleGain, warbleOsc, popFilter;
+let selectedMode = 'auto';
 let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
 let gear = 1, throttle = 0, lastSpeed = 0, lastThrottle = 0, lastTime = performance.now();
 let geoWatchId = null;
@@ -103,17 +117,16 @@ function initAudioGraph() {
 
   // Modulatore AM a 5 impulsi per ciclo (timbro 5 cilindri / RS)
   warbleGain = actx.createGain();
-  warbleGain.gain.value = 0.85; // modulazione leggera
+  warbleGain.gain.value = 0.85;
 
   warbleOsc = actx.createOscillator();
   warbleOsc.type = 'sawtooth';
   const warbleDepth = actx.createGain();
-  warbleDepth.gain.value = 0.15; // 15% di ampiezza
+  warbleDepth.gain.value = 0.15;
   warbleOsc.connect(warbleDepth);
   warbleDepth.connect(warbleGain.gain);
   warbleOsc.start();
 
-  // Istanzia 6 sorgenti in loop continuo, mixate via GainNode
   sourceNodes = [];
   gainNodes = [];
 
@@ -123,7 +136,8 @@ function initAudioGraph() {
     src.loop = true;
 
     const g = actx.createGain();
-    g.gain.value = (i === 0) ? 1.0 : 0.0;
+    // Inizializza tutti muti a 0 per evitare sovrapposizioni allo start
+    g.gain.setValueAtTime(0, actx.currentTime);
 
     src.connect(g);
     g.connect(warbleGain);
@@ -173,34 +187,44 @@ function triggerPop() {
 function updateAudio(rpm, load) {
   if (!actx || sourceNodes.length === 0) return;
 
-  // Trova i due indici dei campioni da crossfadare
-  let lowerIdx = 0;
-  for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
-    if (rpm >= sampleRpmPoints[i]) lowerIdx = i;
-  }
-  const upperIdx = Math.min(sampleRpmPoints.length - 1, lowerIdx + 1);
-
-  const lowerRpm = sampleRpmPoints[lowerIdx];
-  const upperRpm = sampleRpmPoints[upperIdx];
-  const span = Math.max(1, upperRpm - lowerRpm);
-  const factor = Math.max(0, Math.min(1, (rpm - lowerRpm) / span));
-
   const t = actx.currentTime;
   const ramp = 0.05;
 
-  gainNodes.forEach((g, i) => {
-    let target = 0;
-    if (i === lowerIdx) target = (1 - factor);
-    else if (i === upperIdx) target = factor;
-    // Boost leggero con carico
-    target = target * (0.5 + load * 0.5);
-    g.gain.setTargetAtTime(target, t, ramp);
+  if (selectedMode !== 'auto') {
+    // Modalita loop singolo fisso
+    const chosenIdx = parseInt(selectedMode, 10);
+    gainNodes.forEach((g, i) => {
+      const target = (i === chosenIdx) ? (0.6 + load * 0.4) : 0.0;
+      g.gain.setTargetAtTime(target, t, ramp);
+      const refRpm = sampleRpmPoints[i];
+      const rate = Math.max(0.4, Math.min(2.5, rpm / refRpm));
+      sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
+    });
+  } else {
+    // Crossfade dinamico tra i due piu vicini
+    let lowerIdx = 0;
+    for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
+      if (rpm >= sampleRpmPoints[i]) lowerIdx = i;
+    }
+    const upperIdx = Math.min(sampleRpmPoints.length - 1, lowerIdx + 1);
 
-    // Intonazione fine del loop in base a RPM
-    const refRpm = sampleRpmPoints[i];
-    const rate = Math.max(0.6, Math.min(1.8, rpm / refRpm));
-    sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
-  });
+    const lowerRpm = sampleRpmPoints[lowerIdx];
+    const upperRpm = sampleRpmPoints[upperIdx];
+    const span = Math.max(1, upperRpm - lowerRpm);
+    const factor = Math.max(0, Math.min(1, (rpm - lowerRpm) / span));
+
+    gainNodes.forEach((g, i) => {
+      let target = 0;
+      if (i === lowerIdx) target = 1 - factor;
+      else if (i === upperIdx) target = factor;
+      target = target * (0.6 + load * 0.4);
+      g.gain.setTargetAtTime(target, t, ramp);
+
+      const refRpm = sampleRpmPoints[i];
+      const rate = Math.max(0.6, Math.min(1.8, rpm / refRpm));
+      sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
+    });
+  }
 
   // Frequenza del modulatore warble: 5 cilindri 4T = (RPM / 60) * 2.5 Hz
   const warbleFreq = Math.max(10, (rpm / 60) * 2.5);
@@ -303,6 +327,11 @@ const sSlider = document.getElementById('sim-slider');
 sSlider.addEventListener('input', e => {
   currentSpeed = parseFloat(e.target.value);
   document.getElementById('sim-spd').textContent = currentSpeed;
+});
+
+const mSelect = document.getElementById('mode-select');
+mSelect.addEventListener('change', e => {
+  selectedMode = e.target.value;
 });
 </script>
 </body>
