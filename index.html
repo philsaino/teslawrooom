@@ -252,7 +252,8 @@ let sourceNodes = [], gainNodes = [];
 let masterGain = null;
 let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
 let gear = 1, throttle = 0, lastSpeed = 0, lastThrottle = 0, lastTime = performance.now();
-let driveMode = 'ev'; // 'ev' = marcia unica continua, 'gears' = cambio 1-6
+let lastShiftTime = 0; // cooldown anti-pendolamento marce
+let driveMode = 'ev'; // 'ev' = marcia unica continua, 'gears' = cambio ZF 8HP adattivo
 let geoWatchId = null;
 
 // Download arrayBuffer
@@ -358,41 +359,75 @@ function updateAudio(rpm, load) {
 }
 
 function updatePhysics(spd) {
-  if (spd < 1) {
-    gear = 1;
-    targetRpm = IDLE_RPM;
-    throttle = 0;
-  } else {
-    if (driveMode === 'ev') {
-      // Curva EV ricalibrata: progressiva ma non strillata a 7500. A 130 km/h ~3200 RPM, a 230 km/h ~5000 RPM.
-      // Modello con esponente 0.72 per corpo ai bassi e allungo rilassato agli alti
-      const normalizedSpeed = Math.min(260, spd) / 230;
-      targetRpm = IDLE_RPM + Math.pow(normalizedSpeed, 0.72) * 4200;
-      targetRpm = Math.min(5800, targetRpm);
-    } else {
-      // Cambio ZF 8 marce simulato (1-8)
-      if (spd < 20) gear = 1;
-      else if (spd < 42) gear = 2;
-      else if (spd < 70) gear = 3;
-      else if (spd < 100) gear = 4;
-      else if (spd < 135) gear = 5;
-      else if (spd < 175) gear = 6;
-      else if (spd < 215) gear = 7;
-      else gear = 8;
-
-      const wheelCircMeters = 2.05;
-      const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
-      targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, wheelRpm * ratios[gear] * finalDrive));
-    }
-  }
-
   const now = performance.now();
   const dt = (now - lastTime) / 1000;
   if (dt > 0.05) {
     const accel = (spd - lastSpeed) / dt;
-    throttle = Math.max(0, Math.min(1, accel / 15));
+    // Throttle derivato dall'accelerazione (0 = rilascio/costante, 1 = pieno gas)
+    throttle = Math.max(0, Math.min(1, accel / 14));
     lastSpeed = spd;
     lastTime = now;
+  }
+
+  if (spd < 1) {
+    gear = 1;
+    targetRpm = IDLE_RPM;
+  } else {
+    if (driveMode === 'ev') {
+      // Curva EV continua: ~3300 RPM a 130 km/h, ~5000 RPM a 230 km/h
+      const normalizedSpeed = Math.min(260, spd) / 230;
+      targetRpm = IDLE_RPM + Math.pow(normalizedSpeed, 0.72) * 4200;
+      targetRpm = Math.min(5800, targetRpm);
+    } else {
+      // Cambio automatico adattivo ZF 8HP con marce di riposo (cruising/overdrive)
+      const wheelCircMeters = 2.05;
+      const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
+
+      // Calcola i giri potenziali per qualsiasi marcia g (1-8)
+      const calcRpm = (g) => wheelRpm * ratios[g] * finalDrive;
+
+      // Soglie di cambiata dinamiche in base al gas (throttle)
+      // Con poco gas (crociera): cambia presto (1600-2000 RPM)
+      // Con pieno gas (kickdown/tiro): allunga fino a 5500-6500 RPM
+      const upshiftThreshold = 1800 + throttle * 4400; // da 1800 a 6200
+      const downshiftThreshold = 1100 + throttle * 2800; // da 1100 a 3900
+
+      // Anti-hunting: attesa minima 0.8s tra cambi marcia
+      if ((now - lastShiftTime) > 800) {
+        let desiredGear = gear;
+
+        // Se siamo a velocita costante/crociera (throttle basso), cerca la marcia piu alta
+        // che mantiene il motore sopra il minimo confortevole (~1200 RPM)
+        if (throttle < 0.15) {
+          for (let g = 8; g >= 1; g--) {
+            if (calcRpm(g) >= 1150) {
+              desiredGear = g;
+              break;
+            }
+          }
+          if (desiredGear < 1) desiredGear = 1;
+        } else {
+          // Accelerazione / kickdown
+          if (calcRpm(gear) > upshiftThreshold && gear < 8) {
+            desiredGear = gear + 1;
+          } else if (calcRpm(gear) < downshiftThreshold && gear > 1) {
+            // Kickdown: se schiaccia tanto il gas, scala anche 2 marce
+            if (throttle > 0.65 && gear > 2 && calcRpm(gear - 2) < MAX_RPM) {
+              desiredGear = gear - 2;
+            } else {
+              desiredGear = gear - 1;
+            }
+          }
+        }
+
+        if (desiredGear !== gear) {
+          gear = desiredGear;
+          lastShiftTime = now;
+        }
+      }
+
+      targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, calcRpm(gear)));
+    }
   }
 
   currentRpm += (targetRpm - currentRpm) * 0.15;
