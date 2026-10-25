@@ -2,73 +2,238 @@
 <html lang="it">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Tesla Wrooom</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none}
-body{background:#0a0a0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:24px;overflow:hidden}
-header{display:flex;justify-content:space-between;width:100%;max-width:600px;font-size:14px;color:#888}
-#gear{font-size:96px;font-weight:900;line-height:1;color:#ff3b30;text-shadow:0 0 20px rgba(255,59,48,.4)}
-#rpm-val{font-size:48px;font-weight:700;font-variant-numeric:tabular-nums}
-#speed-val{font-size:24px;color:#888}
-.dial{display:flex;flex-direction:column;align-items:center;gap:8px}
-.bar{width:100%;max-width:500px;height:14px;background:#222;border-radius:7px;overflow:hidden}
-#bar-fill{height:100%;width:0;background:linear-gradient(90deg,#30d158,#ffd60a,#ff3b30);transition:width .05s linear}
-.controls{width:100%;max-width:500px;display:flex;flex-direction:column;gap:16px}
-.btn{background:#ff3b30;color:#fff;border:0;padding:16px;border-radius:12px;font-size:18px;font-weight:700;cursor:pointer;width:100%}
-.btn:active{opacity:.8}
-.btn:disabled{opacity:.4;cursor:not-allowed}
-.btn.stop{background:#333}
-.sim{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#aaa}
-.sim input{width:100%;accent-color:#ff3b30}
-.status{font-size:11px;color:#666;text-align:center}
+body{
+  background:#050507;
+  color:#f5f5f7;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;
+  height:100vh;
+  display:grid;
+  grid-template-rows:auto 1fr auto;
+  padding:28px 36px;
+  overflow:hidden;
+}
+
+header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-size:16px;
+  font-weight:600;
+  letter-spacing:1px;
+  color:#8e8e93;
+}
+.badge{
+  background:#1c1c1e;
+  padding:8px 16px;
+  border-radius:20px;
+  font-size:14px;
+  color:#30d158;
+}
+
+/* Cluster centrale tipo cockpit Tesla */
+.cluster{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:18px;
+}
+.speed-display{
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+}
+#speed-num{
+  font-size:120px;
+  font-weight:800;
+  line-height:0.9;
+  letter-spacing:-3px;
+  font-variant-numeric:tabular-nums;
+}
+.speed-unit{
+  font-size:28px;
+  font-weight:600;
+  color:#8e8e93;
+}
+
+.rpm-container{
+  display:flex;
+  align-items:center;
+  gap:16px;
+  font-size:22px;
+  font-weight:600;
+  color:#a1a1a6;
+}
+#rpm-val{
+  font-size:32px;
+  font-weight:700;
+  color:#fff;
+  font-variant-numeric:tabular-nums;
+}
+#gear-badge{
+  background:#ff3b30;
+  color:#fff;
+  padding:4px 14px;
+  border-radius:8px;
+  font-weight:800;
+  font-size:20px;
+}
+
+/* Barra tachimetro / giri stile Tesla Model 3 */
+.bar-track{
+  width:100%;
+  max-width:720px;
+  height:18px;
+  background:#1c1c1e;
+  border-radius:9px;
+  overflow:hidden;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,0.8);
+}
+#bar-fill{
+  height:100%;
+  width:0%;
+  background:linear-gradient(90deg,#30d158 0%,#ffd60a 70%,#ff3b30 95%);
+  transition:width .05s linear;
+}
+
+/* Pannello comandi grande per touch screen */
+.dashboard-controls{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:16px;
+  width:100%;
+  max-width:720px;
+  margin:0 auto;
+}
+
+/* Tasti modalità EV diretto vs Cambio simulato */
+.mode-toggle{
+  display:flex;
+  width:100%;
+  background:#1c1c1e;
+  border-radius:14px;
+  padding:4px;
+  gap:4px;
+}
+.mode-opt{
+  flex:1;
+  padding:14px;
+  border:0;
+  background:transparent;
+  color:#8e8e93;
+  font-size:15px;
+  font-weight:700;
+  border-radius:10px;
+  cursor:pointer;
+  transition:all .15s ease;
+}
+.mode-opt.active{
+  background:#2c2c2e;
+  color:#fff;
+  box-shadow:0 2px 8px rgba(0,0,0,0.4);
+}
+
+/* Pulsantone Avvia/Spegni enorme touch-friendly */
+.btn-power{
+  width:100%;
+  padding:22px;
+  font-size:22px;
+  font-weight:800;
+  letter-spacing:1px;
+  border:0;
+  border-radius:16px;
+  background:#ff3b30;
+  color:#fff;
+  cursor:pointer;
+  box-shadow:0 6px 24px rgba(255,59,48,0.35);
+  transition:transform .1s ease, background .15s ease;
+}
+.btn-power:active{
+  transform:scale(0.98);
+}
+.btn-power.stop{
+  background:#2c2c2e;
+  box-shadow:none;
+}
+.btn-power:disabled{
+  opacity:0.4;
+  cursor:not-allowed;
+}
+
+/* Slider test banco */
+.sim-box{
+  width:100%;
+  display:flex;
+  align-items:center;
+  gap:16px;
+  font-size:14px;
+  color:#8e8e93;
+}
+.sim-box input{
+  flex:1;
+  height:12px;
+  accent-color:#ff3b30;
+  cursor:pointer;
+}
+
+.status-line{
+  font-size:12px;
+  color:#636366;
+  text-align:center;
+}
 </style>
 </head>
 <body>
 
 <header>
-  <span>TESLA WROOOM</span>
-  <span id="gps-status">GPS: in attesa</span>
+  <div>TESLA WROOOM</div>
+  <div class="badge" id="gps-status">GPS IN ATTESA</div>
 </header>
 
-<div class="dial">
-  <div id="gear">P</div>
-  <div id="rpm-val">0 <span style="font-size:20px;color:#666">RPM</span></div>
-  <div id="speed-val"><span id="speed-num">0</span> km/h</div>
-  <div class="bar"><div id="bar-fill"></div></div>
+<div class="cluster">
+  <div class="speed-display">
+    <div id="speed-num">0</div>
+    <div class="speed-unit">km/h</div>
+  </div>
+
+  <div class="rpm-container">
+    <span id="gear-badge">D</span>
+    <span><span id="rpm-val">800</span> RPM</span>
+  </div>
+
+  <div class="bar-track">
+    <div id="bar-fill"></div>
+  </div>
 </div>
 
-<div class="controls">
-  <button id="power-btn" class="btn" disabled>CARICAMENTO AUDIO...</button>
-
-  <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#aaa">
-    <label for="mode-select">Modalita audio:</label>
-    <select id="mode-select" style="background:#222;color:#fff;border:1px solid #444;padding:6px;border-radius:6px">
-      <option value="auto">Crossfade dinamico (tutti)</option>
-      <option value="0">Loop 0 (Idle / Minimo)</option>
-      <option value="1">Loop 1 (Bassi RPM)</option>
-      <option value="2">Loop 2 (Medio-Bassi)</option>
-      <option value="3">Loop 3 (Medi)</option>
-      <option value="4">Loop 4 (Medio-Alti)</option>
-      <option value="5">Loop 5 (Alti RPM)</option>
-    </select>
+<div class="dashboard-controls">
+  <div class="mode-toggle">
+    <button class="mode-opt active" id="btn-ev-mode">MONOMARCIA EV (NATIVO TESLA)</button>
+    <button class="mode-opt" id="btn-gear-mode">CAMBIO VIRTUAL (1-6 MARCE)</button>
   </div>
 
-  <div class="sim">
-    <label>Simulatore velocita: <span id="sim-spd">0</span> km/h</label>
+  <button id="power-btn" class="btn-power" disabled>CARICAMENTO AUDIO...</button>
+
+  <div class="sim-box">
+    <span>TEST BANCO:</span>
     <input type="range" id="sim-slider" min="0" max="220" value="0">
+    <span id="sim-spd" style="min-width:50px">0 km/h</span>
   </div>
 
-  <div class="status" id="diag">Download campioni audio in corso...</div>
+  <div class="status-line" id="diag">Download campioni...</div>
 </div>
 
 <script>
-// ponytail: campioni OpenGameArt domasx2 CC0 con crossfade + modulatore 5 cilindri + exhaust pops.
+// ponytail: supporto doppio (EV monomarcia continuo vs cambio virtuale) con UI grande per schermo Tesla
 const IDLE_RPM = 800, MAX_RPM = 7500;
 const ratios = [0, 3.4, 2.1, 1.45, 1.1, 0.85, 0.7];
 const finalDrive = 3.9;
 
-// 6 campioni mappati su RPM crescenti
 const sampleRpmPoints = [800, 1800, 2800, 4000, 5500, 7200];
 const sampleFiles = [
   'sounds/loop_0.wav',
@@ -83,16 +248,16 @@ let actx = null, isRunning = false;
 let rawAudioArrayBuffers = [];
 let audioBuffers = [];
 let sourceNodes = [], gainNodes = [];
-let masterGain, warbleGain, warbleOsc, popFilter;
-let selectedMode = 'auto';
+let masterGain = null;
 let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
 let gear = 1, throttle = 0, lastSpeed = 0, lastThrottle = 0, lastTime = performance.now();
+let driveMode = 'ev'; // 'ev' = marcia unica continua, 'gears' = cambio 1-6
 let geoWatchId = null;
 
-// Precarica i 6 loop WAV
+// Download arrayBuffer
 async function preloadSamples() {
   try {
-    const promises = sampleFiles.map(async (file) => {
+    const promises = sampleFiles.map(async file => {
       const res = await fetch(file);
       if (!res.ok) throw new Error(`HTTP ${res.status} per ${file}`);
       return await res.arrayBuffer();
@@ -102,14 +267,13 @@ async function preloadSamples() {
     const btn = document.getElementById('power-btn');
     btn.disabled = false;
     btn.textContent = 'AVVIA MOTORE';
-    document.getElementById('diag').textContent = 'Campioni pronti. Premi AVVIA MOTORE.';
+    document.getElementById('diag').textContent = 'Pronto. Tocca AVVIA per partire.';
   } catch (err) {
-    document.getElementById('diag').textContent = 'Errore download suoni: ' + err.message;
+    document.getElementById('diag').textContent = 'Errore suoni: ' + err.message;
   }
 }
 preloadSamples();
 
-// Helper per sbloccare audio su iOS Safari (supporto callback legacy + Promise)
 function decodeAudioCompat(context, arrayBuf) {
   return new Promise((resolve, reject) => {
     const res = context.decodeAudioData(arrayBuf, resolve, reject);
@@ -128,7 +292,6 @@ async function initAudioGraph() {
     await actx.resume();
   }
 
-  // Decodifica i buffer una sola volta dentro il click handler
   if (audioBuffers.length === 0) {
     document.getElementById('diag').textContent = 'Decodifica audio in corso...';
     for (let i = 0; i < rawAudioArrayBuffers.length; i++) {
@@ -144,7 +307,7 @@ async function initAudioGraph() {
   sourceNodes = [];
   gainNodes = [];
 
-  audioBuffers.forEach((buf) => {
+  audioBuffers.forEach(buf => {
     const src = actx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
@@ -160,41 +323,7 @@ async function initAudioGraph() {
     src.start();
   });
 
-  // Applica subito il volume corretto al minimo (RPM idle)
   updateAudio(currentRpm, throttle);
-}
-
-// Scoppiettii di scarico al rilascio (pops & bangs)
-function triggerPop() {
-  if (!actx || !isRunning) return;
-  const count = 1 + Math.floor(Math.random() * 3);
-  for (let i = 0; i < count; i++) {
-    const delay = i * 0.08 + Math.random() * 0.05;
-    setTimeout(() => {
-      if (!actx) return;
-      const t = actx.currentTime;
-      const bSize = actx.sampleRate * 0.04;
-      const b = actx.createBuffer(1, bSize, actx.sampleRate);
-      const data = b.getChannelData(0);
-      for (let j = 0; j < bSize; j++) data[j] = (Math.random() * 2 - 1) * Math.exp(-j / (bSize * 0.3));
-
-      const popSrc = actx.createBufferSource();
-      popSrc.buffer = b;
-      const f = actx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.value = 400 + Math.random() * 600;
-      f.Q.value = 4;
-
-      const g = actx.createGain();
-      g.gain.setValueAtTime(0.7, t);
-      g.gain.exponentialRampToValueAtTime(0.01, t + 0.05);
-
-      popSrc.connect(f);
-      f.connect(g);
-      g.connect(masterGain);
-      popSrc.start();
-    }, delay * 1000);
-  }
 }
 
 function updateAudio(rpm, load) {
@@ -203,41 +332,28 @@ function updateAudio(rpm, load) {
   const t = actx.currentTime;
   const ramp = 0.05;
 
-  if (selectedMode !== 'auto') {
-    // Modalita loop singolo fisso
-    const chosenIdx = parseInt(selectedMode, 10);
-    gainNodes.forEach((g, i) => {
-      const target = (i === chosenIdx) ? (0.6 + load * 0.4) : 0.0;
-      g.gain.setTargetAtTime(target, t, ramp);
-      const refRpm = sampleRpmPoints[i];
-      const rate = Math.max(0.4, Math.min(2.5, rpm / refRpm));
-      sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
-    });
-  } else {
-    // Crossfade dinamico tra i due piu vicini
-    let lowerIdx = 0;
-    for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
-      if (rpm >= sampleRpmPoints[i]) lowerIdx = i;
-    }
-    const upperIdx = Math.min(sampleRpmPoints.length - 1, lowerIdx + 1);
-
-    const lowerRpm = sampleRpmPoints[lowerIdx];
-    const upperRpm = sampleRpmPoints[upperIdx];
-    const span = Math.max(1, upperRpm - lowerRpm);
-    const factor = Math.max(0, Math.min(1, (rpm - lowerRpm) / span));
-
-    gainNodes.forEach((g, i) => {
-      let target = 0;
-      if (i === lowerIdx) target = 1 - factor;
-      else if (i === upperIdx) target = factor;
-      target = target * (0.6 + load * 0.4);
-      g.gain.setTargetAtTime(target, t, ramp);
-
-      const refRpm = sampleRpmPoints[i];
-      const rate = Math.max(0.6, Math.min(1.8, rpm / refRpm));
-      sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
-    });
+  let lowerIdx = 0;
+  for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
+    if (rpm >= sampleRpmPoints[i]) lowerIdx = i;
   }
+  const upperIdx = Math.min(sampleRpmPoints.length - 1, lowerIdx + 1);
+
+  const lowerRpm = sampleRpmPoints[lowerIdx];
+  const upperRpm = sampleRpmPoints[upperIdx];
+  const span = Math.max(1, upperRpm - lowerRpm);
+  const factor = Math.max(0, Math.min(1, (rpm - lowerRpm) / span));
+
+  gainNodes.forEach((g, i) => {
+    let target = 0;
+    if (i === lowerIdx) target = 1 - factor;
+    else if (i === upperIdx) target = factor;
+    target = target * (0.6 + load * 0.4);
+    g.gain.setTargetAtTime(target, t, ramp);
+
+    const refRpm = sampleRpmPoints[i];
+    const rate = Math.max(0.6, Math.min(1.8, rpm / refRpm));
+    sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
+  });
 }
 
 function updatePhysics(spd) {
@@ -246,30 +362,31 @@ function updatePhysics(spd) {
     targetRpm = IDLE_RPM;
     throttle = 0;
   } else {
-    if (spd < 25) gear = 1;
-    else if (spd < 50) gear = 2;
-    else if (spd < 85) gear = 3;
-    else if (spd < 125) gear = 4;
-    else if (spd < 165) gear = 5;
-    else gear = 6;
+    if (driveMode === 'ev') {
+      // Monomarcia EV: l'RPM sale linearmente con la velocita da 0 a 220 km/h (da 800 a 7500 RPM)
+      const ratioEv = (spd / 200); // 200 km/h = limitatore
+      targetRpm = IDLE_RPM + ratioEv * (MAX_RPM - IDLE_RPM);
+      targetRpm = Math.min(MAX_RPM, targetRpm);
+    } else {
+      // Cambio termico simulato (1-6)
+      if (spd < 25) gear = 1;
+      else if (spd < 50) gear = 2;
+      else if (spd < 85) gear = 3;
+      else if (spd < 125) gear = 4;
+      else if (spd < 165) gear = 5;
+      else gear = 6;
 
-    const wheelCircMeters = 2.05;
-    const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
-    targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, wheelRpm * ratios[gear] * finalDrive));
+      const wheelCircMeters = 2.05;
+      const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
+      targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, wheelRpm * ratios[gear] * finalDrive));
+    }
   }
 
   const now = performance.now();
   const dt = (now - lastTime) / 1000;
   if (dt > 0.05) {
     const accel = (spd - lastSpeed) / dt;
-    const newThrottle = Math.max(0, Math.min(1, accel / 15));
-
-    // Deceleration pop se l'utente alza il piede bruscamente da alto RPM
-    if (lastThrottle > 0.4 && newThrottle < 0.1 && currentRpm > 3000) {
-      triggerPop();
-    }
-    lastThrottle = throttle;
-    throttle = newThrottle;
+    throttle = Math.max(0, Math.min(1, accel / 15));
     lastSpeed = spd;
     lastTime = now;
   }
@@ -280,8 +397,9 @@ function updatePhysics(spd) {
     updateAudio(currentRpm, throttle);
   }
 
-  document.getElementById('gear').textContent = spd < 1 ? 'P' : gear;
-  document.getElementById('rpm-val').childNodes[0].textContent = Math.round(currentRpm) + ' ';
+  // UI update
+  document.getElementById('gear-badge').textContent = (spd < 1) ? 'P' : (driveMode === 'ev' ? 'D' : gear);
+  document.getElementById('rpm-val').textContent = Math.round(currentRpm);
   document.getElementById('speed-num').textContent = Math.round(spd);
   document.getElementById('bar-fill').style.width = Math.min(100, (currentRpm / MAX_RPM) * 100) + '%';
 }
@@ -294,71 +412,83 @@ requestAnimationFrame(loop);
 
 function startGps() {
   if (!('geolocation' in navigator)) {
-    document.getElementById('gps-status').textContent = 'GPS non disp.';
+    document.getElementById('gps-status').textContent = 'NO GPS';
     return;
   }
   geoWatchId = navigator.geolocation.watchPosition(
     pos => {
       const spdKmh = (pos.coords.speed || 0) * 3.6;
       currentSpeed = Math.max(0, spdKmh);
-      document.getElementById('gps-status').textContent = `GPS: ±${Math.round(pos.coords.accuracy || 0)}m`;
+      document.getElementById('gps-status').textContent = `GPS ATTIVO (±${Math.round(pos.coords.accuracy || 0)}m)`;
     },
     err => {
-      document.getElementById('gps-status').textContent = 'GPS: ' + err.message;
+      document.getElementById('gps-status').textContent = 'ERRORE GPS';
     },
     { enableHighAccuracy: true, maximumAge: 500, timeout: 5000 }
   );
 }
 
+// Handler UI
 const pBtn = document.getElementById('power-btn');
 pBtn.addEventListener('click', async () => {
-    // Sblocca immediatamente AudioContext sincrono sul primo gesto iOS/Safari
-    if (!actx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      actx = new AC();
-    }
-    if (actx.state === 'suspended') {
-      await actx.resume();
-    }
+  if (!actx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    actx = new AC();
+  }
+  if (actx.state === 'suspended') {
+    await actx.resume();
+  }
 
-    if (!isRunning) {
-      pBtn.disabled = true;
-      pBtn.textContent = 'AVVIO IN CORSO...';
-      try {
-        await initAudioGraph();
-        startGps();
-        isRunning = true;
-        pBtn.textContent = 'SPEGNI MOTORE';
-        pBtn.classList.add('stop');
-        pBtn.disabled = false;
-        document.getElementById('diag').textContent = 'Motore attivo.';
-      } catch (e) {
-        pBtn.disabled = false;
-        pBtn.textContent = 'AVVIA MOTORE';
-        document.getElementById('diag').textContent = 'Errore avvio: ' + e.message;
-      }
-    } else {
-      sourceNodes.forEach(s => { try { s.stop(); } catch(e){} });
-      sourceNodes = [];
-      gainNodes = [];
-      if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
-      isRunning = false;
-      currentSpeed = 0;
+  if (!isRunning) {
+    pBtn.disabled = true;
+    pBtn.textContent = 'AVVIO...';
+    try {
+      await initAudioGraph();
+      startGps();
+      isRunning = true;
+      pBtn.textContent = 'SPEGNI MOTORE';
+      pBtn.classList.add('stop');
+      pBtn.disabled = false;
+      document.getElementById('diag').textContent = 'Motore in esecuzione.';
+    } catch (e) {
+      pBtn.disabled = false;
       pBtn.textContent = 'AVVIA MOTORE';
-      pBtn.classList.remove('stop');
-      document.getElementById('diag').textContent = 'Motore spento.';
+      document.getElementById('diag').textContent = 'Errore: ' + e.message;
     }
-  });
+  } else {
+    sourceNodes.forEach(s => { try { s.stop(); } catch(e){} });
+    sourceNodes = [];
+    gainNodes = [];
+    if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
+    isRunning = false;
+    currentSpeed = 0;
+    pBtn.textContent = 'AVVIA MOTORE';
+    pBtn.classList.remove('stop');
+    document.getElementById('diag').textContent = 'Motore spento.';
+  }
+});
 
+// Switch modalità EV vs Cambio
+const btnEv = document.getElementById('btn-ev-mode');
+const btnGear = document.getElementById('btn-gear-mode');
+
+btnEv.addEventListener('click', () => {
+  driveMode = 'ev';
+  btnEv.classList.add('active');
+  btnGear.classList.remove('active');
+});
+
+btnGear.addEventListener('click', () => {
+  driveMode = 'gears';
+  btnGear.classList.add('active');
+  btnEv.classList.remove('active');
+});
+
+// Slider test banco
 const sSlider = document.getElementById('sim-slider');
 sSlider.addEventListener('input', e => {
   currentSpeed = parseFloat(e.target.value);
-  document.getElementById('sim-spd').textContent = currentSpeed;
-});
-
-const mSelect = document.getElementById('mode-select');
-mSelect.addEventListener('change', e => {
-  selectedMode = e.target.value;
+  document.getElementById('sim-spd').textContent = `${Math.round(currentSpeed)} km/h`;
 });
 </script>
 </body>
