@@ -274,20 +274,27 @@ function registerSpeedUpdate(spd) {
   currentSpeed = Math.max(0, spd);
 }
 
-// Download arrayBuffer
+// Pre-caricamento e decodifica immediata all'avvio della pagina (non aspettiamo il click)
 async function preloadSamples() {
   try {
-    const promises = sampleFiles.map(async file => {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    actx = new AC();
+
+    document.getElementById('diag').textContent = 'Scaricamento audio...';
+    const fetchPromises = sampleFiles.map(async file => {
       const res = await fetch(file);
       if (!res.ok) throw new Error(`HTTP ${res.status} per ${file}`);
-      return await res.arrayBuffer();
+      const arrayBuf = await res.arrayBuffer();
+      // Decodifica in parallelo mentre scarica
+      return await decodeAudioCompat(actx, arrayBuf);
     });
-    rawAudioArrayBuffers = await Promise.all(promises);
+
+    audioBuffers = await Promise.all(fetchPromises);
 
     const btn = document.getElementById('power-btn');
     btn.disabled = false;
     btn.textContent = 'AVVIA MOTORE';
-    document.getElementById('diag').textContent = 'Pronto. Tocca AVVIA per partire.';
+    document.getElementById('diag').textContent = 'Audio pronto in RAM. Tocca AVVIA per partire.';
   } catch (err) {
     document.getElementById('diag').textContent = 'Errore suoni: ' + err.message;
   }
@@ -308,16 +315,20 @@ async function initAudioGraph() {
     const AC = window.AudioContext || window.webkitAudioContext;
     actx = new AC();
   }
+  // Sblocco istantaneo
   if (actx.state === 'suspended') {
     await actx.resume();
   }
 
+  // Se per policy Safari non avesse decodificato prima, fallback
   if (audioBuffers.length === 0) {
-    document.getElementById('diag').textContent = 'Decodifica audio in corso...';
-    for (let i = 0; i < rawAudioArrayBuffers.length; i++) {
-      const buf = await decodeAudioCompat(actx, rawAudioArrayBuffers[i].slice(0));
-      audioBuffers.push(buf);
-    }
+    document.getElementById('diag').textContent = 'Decodifica audio...';
+    const fetchPromises = sampleFiles.map(async file => {
+      const res = await fetch(file);
+      const arrayBuf = await res.arrayBuffer();
+      return await decodeAudioCompat(actx, arrayBuf);
+    });
+    audioBuffers = await Promise.all(fetchPromises);
   }
 
   masterGain = actx.createGain();
@@ -350,7 +361,8 @@ function updateAudio(rpm, load) {
   if (!actx || sourceNodes.length === 0) return;
 
   const t = actx.currentTime;
-  const ramp = 0.05;
+  // Costante di rampa dimezzata per risposta reattiva immediata al tocco/slider
+  const ramp = 0.018;
 
   let lowerIdx = 0;
   for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
@@ -376,8 +388,11 @@ function updateAudio(rpm, load) {
   });
 }
 
+let lastLoopTime = performance.now();
 function updatePhysics(spd) {
   const now = performance.now();
+  const dt = Math.min(0.1, (now - lastLoopTime) / 1000);
+  lastLoopTime = now;
 
   if (spd < 1) {
     gear = 1;
@@ -389,29 +404,22 @@ function updatePhysics(spd) {
       targetRpm = IDLE_RPM + Math.pow(normalizedSpeed, 0.72) * 4200;
       targetRpm = Math.min(5800, targetRpm);
     } else {
-      // Cambio ZF 8HP adattivo con isteresi fluida e marce di riposo
+      // Cambio ZF 8HP adattivo
       const wheelCircMeters = 2.05;
       const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
       const calcRpm = (g) => wheelRpm * ratios[g] * finalDrive;
 
-      // Soglie continue su filteredThrottle (0 = crociera rilassata, 1 = pieno carico)
       const upshiftRpm = 1850 + filteredThrottle * 3550;
       const downshiftRpm = 1150 + filteredThrottle * 2050;
 
-      // Cooldown 1.2s anti-pendolamento
       if ((now - lastShiftTime) >= 1200) {
         const currentRpmG = calcRpm(gear);
-
-        // Salita di marcia graduale: controlla che il rapporto superiore rimanga sopra 1100 RPM
         if (currentRpmG > upshiftRpm && gear < 8) {
           if (calcRpm(gear + 1) >= 1100) {
             gear++;
             lastShiftTime = now;
           }
-        }
-        // Scalata
-        else if (currentRpmG < downshiftRpm && gear > 1) {
-          // Kickdown (doppia scalata) solo con gas pieno prolungato
+        } else if (currentRpmG < downshiftRpm && gear > 1) {
           if (filteredThrottle > 0.75 && gear > 2 && calcRpm(gear - 2) < (MAX_RPM - 800)) {
             gear -= 2;
           } else {
@@ -425,7 +433,9 @@ function updatePhysics(spd) {
     }
   }
 
-  currentRpm += (targetRpm - currentRpm) * 0.15;
+  // Risposta fisica del motore indipendente dal framerate dello schermo Tesla: tau = 70ms (reattivo)
+  const rpmFollowFactor = 1 - Math.exp(-dt / 0.07);
+  currentRpm += (targetRpm - currentRpm) * rpmFollowFactor;
 
   if (isRunning) {
     updateAudio(currentRpm, filteredThrottle);
