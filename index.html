@@ -17,6 +17,7 @@ header{display:flex;justify-content:space-between;width:100%;max-width:600px;fon
 .controls{width:100%;max-width:500px;display:flex;flex-direction:column;gap:16px}
 .btn{background:#ff3b30;color:#fff;border:0;padding:16px;border-radius:12px;font-size:18px;font-weight:700;cursor:pointer;width:100%}
 .btn:active{opacity:.8}
+.btn:disabled{opacity:.4;cursor:not-allowed}
 .btn.stop{background:#333}
 .sim{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#aaa}
 .sim input{width:100%;accent-color:#ff3b30}
@@ -31,89 +32,187 @@ header{display:flex;justify-content:space-between;width:100%;max-width:600px;fon
 </header>
 
 <div class="dial">
-  <div id="gear">N</div>
+  <div id="gear">P</div>
   <div id="rpm-val">0 <span style="font-size:20px;color:#666">RPM</span></div>
   <div id="speed-val"><span id="speed-num">0</span> km/h</div>
   <div class="bar"><div id="bar-fill"></div></div>
 </div>
 
 <div class="controls">
-  <button id="power-btn" class="btn">AVVIA MOTORE</button>
+  <button id="power-btn" class="btn" disabled>CARICAMENTO AUDIO...</button>
 
   <div class="sim">
-    <label>Simulatore velocita (per test a banco): <span id="sim-spd">0</span> km/h</label>
+    <label>Simulatore velocita: <span id="sim-spd">0</span> km/h</label>
     <input type="range" id="sim-slider" min="0" max="220" value="0">
   </div>
 
-  <div class="status" id="diag">Tocca "AVVIA MOTORE" per abilitare l'audio WebAudio.</div>
+  <div class="status" id="diag">Download campioni audio in corso...</div>
 </div>
 
 <script>
-// ponytail: sintesi elementare 5 cilindri in linea (1-2-4-5-3). Upgrade: aggiungere rumore convoluzione scarico.
-let actx = null, isRunning = false;
-let oscs = [], gains = [], masterGain, distNode, exhaustFilter;
-let currentSpeed = 0, targetRpm = 800, currentRpm = 800;
-let gear = 1, throttle = 0, lastSpeed = 0, lastTime = performance.now();
+// ponytail: campioni OpenGameArt domasx2 CC0 con crossfade + modulatore 5 cilindri + exhaust pops.
 const IDLE_RPM = 800, MAX_RPM = 7500;
-const ratios = [0, 3.4, 2.1, 1.45, 1.1, 0.85, 0.7]; // 1-6 + folle
+const ratios = [0, 3.4, 2.1, 1.45, 1.1, 0.85, 0.7];
 const finalDrive = 3.9;
 
-function initAudio() {
+// 6 campioni mappati su RPM crescenti
+const sampleRpmPoints = [800, 1800, 2800, 4000, 5500, 7200];
+const sampleFiles = [
+  'sounds/loop_0.wav',
+  'sounds/loop_1.wav',
+  'sounds/loop_2.wav',
+  'sounds/loop_3.wav',
+  'sounds/loop_4.wav',
+  'sounds/loop_5.wav'
+];
+
+let actx = null, isRunning = false;
+let audioBuffers = [];
+let sourceNodes = [], gainNodes = [];
+let masterGain, warbleGain, warbleOsc, popFilter;
+let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
+let gear = 1, throttle = 0, lastSpeed = 0, lastThrottle = 0, lastTime = performance.now();
+let geoWatchId = null;
+
+// Precarica i 6 loop WAV
+async function preloadSamples() {
   const AC = window.AudioContext || window.webkitAudioContext;
   actx = new AC();
 
+  try {
+    const promises = sampleFiles.map(async (file) => {
+      const res = await fetch(file);
+      const arr = await res.arrayBuffer();
+      return await actx.decodeAudioData(arr);
+    });
+    audioBuffers = await Promise.all(promises);
+
+    const btn = document.getElementById('power-btn');
+    btn.disabled = false;
+    btn.textContent = 'AVVIA MOTORE';
+    document.getElementById('diag').textContent = 'Campioni caricati. Premi AVVIA.';
+  } catch (err) {
+    document.getElementById('diag').textContent = 'Errore fetch campioni: ' + err.message;
+  }
+}
+preloadSamples();
+
+function initAudioGraph() {
   masterGain = actx.createGain();
-  masterGain.gain.value = 0.6;
+  masterGain.gain.value = 0.8;
 
-  // Distorsione calda per timbro termico
-  distNode = actx.createWaveShaper();
-  distNode.curve = makeDistortionCurve(12);
-  distNode.oversample = '2x';
+  // Modulatore AM a 5 impulsi per ciclo (timbro 5 cilindri / RS)
+  warbleGain = actx.createGain();
+  warbleGain.gain.value = 0.85; // modulazione leggera
 
-  // Risonanza scarico
-  exhaustFilter = actx.createBiquadFilter();
-  exhaustFilter.type = 'lowpass';
-  exhaustFilter.frequency.value = 1200;
-  exhaustFilter.Q.value = 3;
+  warbleOsc = actx.createOscillator();
+  warbleOsc.type = 'sawtooth';
+  const warbleDepth = actx.createGain();
+  warbleDepth.gain.value = 0.15; // 15% di ampiezza
+  warbleOsc.connect(warbleDepth);
+  warbleDepth.connect(warbleGain.gain);
+  warbleOsc.start();
 
-  // 5 cilindri: ordini di accensione (1x, 2.5x per 5 cil 4-tempi, 5x, armoniche sporche)
-  const orderMultipliers = [1, 2.5, 5, 7.5, 0.5];
-  const orderGains = [0.4, 0.8, 0.3, 0.15, 0.2];
+  // Istanzia 6 sorgenti in loop continuo, mixate via GainNode
+  sourceNodes = [];
+  gainNodes = [];
 
-  orderMultipliers.forEach((mult, idx) => {
-    const osc = actx.createOscillator();
-    osc.type = idx === 0 ? 'sawtooth' : (idx === 1 ? 'triangle' : 'sawtooth');
+  audioBuffers.forEach((buf, i) => {
+    const src = actx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+
     const g = actx.createGain();
-    g.gain.value = orderGains[idx];
-    osc.connect(g);
-    g.connect(distNode);
-    oscs.push({ osc, mult });
-    gains.push(g);
-    osc.start();
+    g.gain.value = (i === 0) ? 1.0 : 0.0;
+
+    src.connect(g);
+    g.connect(warbleGain);
+
+    sourceNodes.push(src);
+    gainNodes.push(g);
+    src.start();
   });
 
-  distNode.connect(exhaustFilter);
-  exhaustFilter.connect(masterGain);
+  warbleGain.connect(masterGain);
   masterGain.connect(actx.destination);
 }
 
-function makeDistortionCurve(k) {
-  const n = 44100, curve = new Float32Array(n), deg = Math.PI / 180;
-  for (let i = 0; i < n; ++i) {
-    const x = (i * 2) / n - 1;
-    curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+// Scoppiettii di scarico al rilascio (pops & bangs)
+function triggerPop() {
+  if (!actx || !isRunning) return;
+  const count = 1 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const delay = i * 0.08 + Math.random() * 0.05;
+    setTimeout(() => {
+      if (!actx) return;
+      const t = actx.currentTime;
+      const bSize = actx.sampleRate * 0.04;
+      const b = actx.createBuffer(1, bSize, actx.sampleRate);
+      const data = b.getChannelData(0);
+      for (let j = 0; j < bSize; j++) data[j] = (Math.random() * 2 - 1) * Math.exp(-j / (bSize * 0.3));
+
+      const popSrc = actx.createBufferSource();
+      popSrc.buffer = b;
+      const f = actx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = 400 + Math.random() * 600;
+      f.Q.value = 4;
+
+      const g = actx.createGain();
+      g.gain.setValueAtTime(0.7, t);
+      g.gain.exponentialRampToValueAtTime(0.01, t + 0.05);
+
+      popSrc.connect(f);
+      f.connect(g);
+      g.connect(masterGain);
+      popSrc.start();
+    }, delay * 1000);
   }
-  return curve;
+}
+
+function updateAudio(rpm, load) {
+  if (!actx || sourceNodes.length === 0) return;
+
+  // Trova i due indici dei campioni da crossfadare
+  let lowerIdx = 0;
+  for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
+    if (rpm >= sampleRpmPoints[i]) lowerIdx = i;
+  }
+  const upperIdx = Math.min(sampleRpmPoints.length - 1, lowerIdx + 1);
+
+  const lowerRpm = sampleRpmPoints[lowerIdx];
+  const upperRpm = sampleRpmPoints[upperIdx];
+  const span = Math.max(1, upperRpm - lowerRpm);
+  const factor = Math.max(0, Math.min(1, (rpm - lowerRpm) / span));
+
+  const t = actx.currentTime;
+  const ramp = 0.05;
+
+  gainNodes.forEach((g, i) => {
+    let target = 0;
+    if (i === lowerIdx) target = (1 - factor);
+    else if (i === upperIdx) target = factor;
+    // Boost leggero con carico
+    target = target * (0.5 + load * 0.5);
+    g.gain.setTargetAtTime(target, t, ramp);
+
+    // Intonazione fine del loop in base a RPM
+    const refRpm = sampleRpmPoints[i];
+    const rate = Math.max(0.6, Math.min(1.8, rpm / refRpm));
+    sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
+  });
+
+  // Frequenza del modulatore warble: 5 cilindri 4T = (RPM / 60) * 2.5 Hz
+  const warbleFreq = Math.max(10, (rpm / 60) * 2.5);
+  warbleOsc.frequency.setTargetAtTime(warbleFreq, t, ramp);
 }
 
 function updatePhysics(spd) {
-  // Cambio automatico simulato semplice
   if (spd < 1) {
     gear = 1;
     targetRpm = IDLE_RPM;
     throttle = 0;
   } else {
-    // Stima marcia da velocita
     if (spd < 25) gear = 1;
     else if (spd < 50) gear = 2;
     else if (spd < 85) gear = 3;
@@ -121,55 +220,48 @@ function updatePhysics(spd) {
     else if (spd < 165) gear = 5;
     else gear = 6;
 
-    const wheelCircMeters = 2.05; // 235/45 R18 tipico Model 3
+    const wheelCircMeters = 2.05;
     const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
     targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, wheelRpm * ratios[gear] * finalDrive));
   }
 
-  // Throttle da delta velocita
   const now = performance.now();
   const dt = (now - lastTime) / 1000;
   if (dt > 0.05) {
-    const accel = (spd - lastSpeed) / dt; // km/h al secondo
-    throttle = Math.max(0, Math.min(1, accel / 15)); // 15 km/h/s = full throttle
+    const accel = (spd - lastSpeed) / dt;
+    const newThrottle = Math.max(0, Math.min(1, accel / 15));
+
+    // Deceleration pop se l'utente alza il piede bruscamente da alto RPM
+    if (lastThrottle > 0.4 && newThrottle < 0.1 && currentRpm > 3000) {
+      triggerPop();
+    }
+    lastThrottle = throttle;
+    throttle = newThrottle;
     lastSpeed = spd;
     lastTime = now;
   }
 
-  // Interpolazione RPM fluida (inerzia motore)
   currentRpm += (targetRpm - currentRpm) * 0.15;
 
-  if (actx && isRunning) {
-    // 5 cilindri 4-tempi: frequenza base = (RPM / 60) * (5 / 2) ? no, base albero = RPM / 60
-    const baseFreq = Math.max(15, currentRpm / 60);
-    oscs.forEach(o => {
-      o.osc.frequency.setTargetAtTime(baseFreq * o.mult, actx.currentTime, 0.03);
-    });
-    // Filtro scarico si apre con throttle e RPM
-    const cutoff = 400 + (currentRpm / MAX_RPM) * 3500 + throttle * 1500;
-    exhaustFilter.frequency.setTargetAtTime(cutoff, actx.currentTime, 0.04);
-    masterGain.gain.setTargetAtTime(0.3 + throttle * 0.5, actx.currentTime, 0.04);
+  if (isRunning) {
+    updateAudio(currentRpm, throttle);
   }
 
-  // UI
   document.getElementById('gear').textContent = spd < 1 ? 'P' : gear;
   document.getElementById('rpm-val').childNodes[0].textContent = Math.round(currentRpm) + ' ';
   document.getElementById('speed-num').textContent = Math.round(spd);
   document.getElementById('bar-fill').style.width = Math.min(100, (currentRpm / MAX_RPM) * 100) + '%';
 }
 
-// Loop animazione
 function loop() {
   updatePhysics(currentSpeed);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
-// GPS Tesla
-let geoWatchId = null;
 function startGps() {
   if (!('geolocation' in navigator)) {
-    document.getElementById('gps-status').textContent = 'GPS non disponibile';
+    document.getElementById('gps-status').textContent = 'GPS non disp.';
     return;
   }
   geoWatchId = navigator.geolocation.watchPosition(
@@ -185,19 +277,19 @@ function startGps() {
   );
 }
 
-// Controlli UI
 const pBtn = document.getElementById('power-btn');
 pBtn.addEventListener('click', async () => {
   if (!isRunning) {
-    if (!actx) initAudio();
     if (actx.state === 'suspended') await actx.resume();
+    initAudioGraph();
     startGps();
     isRunning = true;
     pBtn.textContent = 'SPEGNI MOTORE';
     pBtn.classList.add('stop');
-    document.getElementById('diag').textContent = 'Motore acceso. Pronto per il browser Tesla.';
+    document.getElementById('diag').textContent = 'Motore a campioni attivo con modulazione 5 cilindri.';
   } else {
-    if (actx) actx.suspend();
+    sourceNodes.forEach(s => { try { s.stop(); } catch(e){} });
+    sourceNodes = [];
     if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
     isRunning = false;
     currentSpeed = 0;
@@ -207,7 +299,6 @@ pBtn.addEventListener('click', async () => {
   }
 });
 
-// Slider manuale
 const sSlider = document.getElementById('sim-slider');
 sSlider.addEventListener('input', e => {
   currentSpeed = parseFloat(e.target.value);
