@@ -251,10 +251,28 @@ let audioBuffers = [];
 let sourceNodes = [], gainNodes = [];
 let masterGain = null;
 let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
-let gear = 1, throttle = 0, lastSpeed = 0, lastThrottle = 0, lastTime = performance.now();
-let lastShiftTime = 0; // cooldown anti-pendolamento marce
-let driveMode = 'ev'; // 'ev' = marcia unica continua, 'gears' = cambio ZF 8HP adattivo
+let gear = 1;
+let filteredThrottle = 0;
+let lastSpeedSample = 0, lastSpeedSampleTime = performance.now();
+let lastShiftTime = 0;
+let driveMode = 'ev';
 let geoWatchId = null;
+
+// Gestione arrivo nuovo dato di velocita (GPS o slider) con calcolo accelerazione filtrata
+function registerSpeedUpdate(spd) {
+  const now = performance.now();
+  const dt = (now - lastSpeedSampleTime) / 1000;
+  if (dt > 0.08) {
+    const rawAccel = (spd - lastSpeedSample) / dt; // km/h al secondo
+    const rawThrottle = Math.max(0, Math.min(1, rawAccel / 12));
+    // Filtro asimmetrico: sale veloce (alpha 0.4), scende lento (alpha 0.15) per simulare pedale
+    const alpha = rawThrottle > filteredThrottle ? 0.4 : 0.15;
+    filteredThrottle += (rawThrottle - filteredThrottle) * alpha;
+    lastSpeedSample = spd;
+    lastSpeedSampleTime = now;
+  }
+  currentSpeed = Math.max(0, spd);
+}
 
 // Download arrayBuffer
 async function preloadSamples() {
@@ -360,68 +378,45 @@ function updateAudio(rpm, load) {
 
 function updatePhysics(spd) {
   const now = performance.now();
-  const dt = (now - lastTime) / 1000;
-  if (dt > 0.05) {
-    const accel = (spd - lastSpeed) / dt;
-    // Throttle derivato dall'accelerazione (0 = rilascio/costante, 1 = pieno gas)
-    throttle = Math.max(0, Math.min(1, accel / 14));
-    lastSpeed = spd;
-    lastTime = now;
-  }
 
   if (spd < 1) {
     gear = 1;
     targetRpm = IDLE_RPM;
   } else {
     if (driveMode === 'ev') {
-      // Curva EV continua: ~3300 RPM a 130 km/h, ~5000 RPM a 230 km/h
+      // Curva EV continua
       const normalizedSpeed = Math.min(260, spd) / 230;
       targetRpm = IDLE_RPM + Math.pow(normalizedSpeed, 0.72) * 4200;
       targetRpm = Math.min(5800, targetRpm);
     } else {
-      // Cambio automatico adattivo ZF 8HP con marce di riposo (cruising/overdrive)
+      // Cambio ZF 8HP adattivo con isteresi fluida e marce di riposo
       const wheelCircMeters = 2.05;
       const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
-
-      // Calcola i giri potenziali per qualsiasi marcia g (1-8)
       const calcRpm = (g) => wheelRpm * ratios[g] * finalDrive;
 
-      // Soglie di cambiata dinamiche in base al gas (throttle)
-      // Con poco gas (crociera): cambia presto (1600-2000 RPM)
-      // Con pieno gas (kickdown/tiro): allunga fino a 5500-6500 RPM
-      const upshiftThreshold = 1800 + throttle * 4400; // da 1800 a 6200
-      const downshiftThreshold = 1100 + throttle * 2800; // da 1100 a 3900
+      // Soglie continue su filteredThrottle (0 = crociera rilassata, 1 = pieno carico)
+      const upshiftRpm = 1850 + filteredThrottle * 3550;
+      const downshiftRpm = 1150 + filteredThrottle * 2050;
 
-      // Anti-hunting: attesa minima 0.8s tra cambi marcia
-      if ((now - lastShiftTime) > 800) {
-        let desiredGear = gear;
+      // Cooldown 1.2s anti-pendolamento
+      if ((now - lastShiftTime) >= 1200) {
+        const currentRpmG = calcRpm(gear);
 
-        // Se siamo a velocita costante/crociera (throttle basso), cerca la marcia piu alta
-        // che mantiene il motore sopra il minimo confortevole (~1200 RPM)
-        if (throttle < 0.15) {
-          for (let g = 8; g >= 1; g--) {
-            if (calcRpm(g) >= 1150) {
-              desiredGear = g;
-              break;
-            }
-          }
-          if (desiredGear < 1) desiredGear = 1;
-        } else {
-          // Accelerazione / kickdown
-          if (calcRpm(gear) > upshiftThreshold && gear < 8) {
-            desiredGear = gear + 1;
-          } else if (calcRpm(gear) < downshiftThreshold && gear > 1) {
-            // Kickdown: se schiaccia tanto il gas, scala anche 2 marce
-            if (throttle > 0.65 && gear > 2 && calcRpm(gear - 2) < MAX_RPM) {
-              desiredGear = gear - 2;
-            } else {
-              desiredGear = gear - 1;
-            }
+        // Salita di marcia graduale: controlla che il rapporto superiore rimanga sopra 1100 RPM
+        if (currentRpmG > upshiftRpm && gear < 8) {
+          if (calcRpm(gear + 1) >= 1100) {
+            gear++;
+            lastShiftTime = now;
           }
         }
-
-        if (desiredGear !== gear) {
-          gear = desiredGear;
+        // Scalata
+        else if (currentRpmG < downshiftRpm && gear > 1) {
+          // Kickdown (doppia scalata) solo con gas pieno prolungato
+          if (filteredThrottle > 0.75 && gear > 2 && calcRpm(gear - 2) < (MAX_RPM - 800)) {
+            gear -= 2;
+          } else {
+            gear--;
+          }
           lastShiftTime = now;
         }
       }
@@ -433,7 +428,7 @@ function updatePhysics(spd) {
   currentRpm += (targetRpm - currentRpm) * 0.15;
 
   if (isRunning) {
-    updateAudio(currentRpm, throttle);
+    updateAudio(currentRpm, filteredThrottle);
   }
 
   // UI update
@@ -457,7 +452,7 @@ function startGps() {
   geoWatchId = navigator.geolocation.watchPosition(
     pos => {
       const spdKmh = (pos.coords.speed || 0) * 3.6;
-      currentSpeed = Math.max(0, spdKmh);
+      registerSpeedUpdate(spdKmh);
       document.getElementById('gps-status').textContent = `GPS ATTIVO (±${Math.round(pos.coords.accuracy || 0)}m)`;
     },
     err => {
@@ -526,8 +521,9 @@ btnGear.addEventListener('click', () => {
 // Slider test banco
 const sSlider = document.getElementById('sim-slider');
 sSlider.addEventListener('input', e => {
-  currentSpeed = parseFloat(e.target.value);
-  document.getElementById('sim-spd').textContent = `${Math.round(currentSpeed)} km/h`;
+  const val = parseFloat(e.target.value);
+  registerSpeedUpdate(val);
+  document.getElementById('sim-spd').textContent = `${Math.round(val)} km/h`;
 });
 </script>
 </body>
