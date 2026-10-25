@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Tesla Wrooom</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none}
+body{background:#0a0a0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:24px;overflow:hidden}
+header{display:flex;justify-content:space-between;width:100%;max-width:600px;font-size:14px;color:#888}
+#gear{font-size:96px;font-weight:900;line-height:1;color:#ff3b30;text-shadow:0 0 20px rgba(255,59,48,.4)}
+#rpm-val{font-size:48px;font-weight:700;font-variant-numeric:tabular-nums}
+#speed-val{font-size:24px;color:#888}
+.dial{display:flex;flex-direction:column;align-items:center;gap:8px}
+.bar{width:100%;max-width:500px;height:14px;background:#222;border-radius:7px;overflow:hidden}
+#bar-fill{height:100%;width:0;background:linear-gradient(90deg,#30d158,#ffd60a,#ff3b30);transition:width .05s linear}
+.controls{width:100%;max-width:500px;display:flex;flex-direction:column;gap:16px}
+.btn{background:#ff3b30;color:#fff;border:0;padding:16px;border-radius:12px;font-size:18px;font-weight:700;cursor:pointer;width:100%}
+.btn:active{opacity:.8}
+.btn.stop{background:#333}
+.sim{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#aaa}
+.sim input{width:100%;accent-color:#ff3b30}
+.status{font-size:11px;color:#666;text-align:center}
+</style>
+</head>
+<body>
+
+<header>
+  <span>TESLA WROOOM</span>
+  <span id="gps-status">GPS: in attesa</span>
+</header>
+
+<div class="dial">
+  <div id="gear">N</div>
+  <div id="rpm-val">0 <span style="font-size:20px;color:#666">RPM</span></div>
+  <div id="speed-val"><span id="speed-num">0</span> km/h</div>
+  <div class="bar"><div id="bar-fill"></div></div>
+</div>
+
+<div class="controls">
+  <button id="power-btn" class="btn">AVVIA MOTORE</button>
+
+  <div class="sim">
+    <label>Simulatore velocita (per test a banco): <span id="sim-spd">0</span> km/h</label>
+    <input type="range" id="sim-slider" min="0" max="220" value="0">
+  </div>
+
+  <div class="status" id="diag">Tocca "AVVIA MOTORE" per abilitare l'audio WebAudio.</div>
+</div>
+
+<script>
+// ponytail: sintesi elementare 5 cilindri in linea (1-2-4-5-3). Upgrade: aggiungere rumore convoluzione scarico.
+let actx = null, isRunning = false;
+let oscs = [], gains = [], masterGain, distNode, exhaustFilter;
+let currentSpeed = 0, targetRpm = 800, currentRpm = 800;
+let gear = 1, throttle = 0, lastSpeed = 0, lastTime = performance.now();
+const IDLE_RPM = 800, MAX_RPM = 7500;
+const ratios = [0, 3.4, 2.1, 1.45, 1.1, 0.85, 0.7]; // 1-6 + folle
+const finalDrive = 3.9;
+
+function initAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  actx = new AC();
+
+  masterGain = actx.createGain();
+  masterGain.gain.value = 0.6;
+
+  // Distorsione calda per timbro termico
+  distNode = actx.createWaveShaper();
+  distNode.curve = makeDistortionCurve(12);
+  distNode.oversample = '2x';
+
+  // Risonanza scarico
+  exhaustFilter = actx.createBiquadFilter();
+  exhaustFilter.type = 'lowpass';
+  exhaustFilter.frequency.value = 1200;
+  exhaustFilter.Q.value = 3;
+
+  // 5 cilindri: ordini di accensione (1x, 2.5x per 5 cil 4-tempi, 5x, armoniche sporche)
+  const orderMultipliers = [1, 2.5, 5, 7.5, 0.5];
+  const orderGains = [0.4, 0.8, 0.3, 0.15, 0.2];
+
+  orderMultipliers.forEach((mult, idx) => {
+    const osc = actx.createOscillator();
+    osc.type = idx === 0 ? 'sawtooth' : (idx === 1 ? 'triangle' : 'sawtooth');
+    const g = actx.createGain();
+    g.gain.value = orderGains[idx];
+    osc.connect(g);
+    g.connect(distNode);
+    oscs.push({ osc, mult });
+    gains.push(g);
+    osc.start();
+  });
+
+  distNode.connect(exhaustFilter);
+  exhaustFilter.connect(masterGain);
+  masterGain.connect(actx.destination);
+}
+
+function makeDistortionCurve(k) {
+  const n = 44100, curve = new Float32Array(n), deg = Math.PI / 180;
+  for (let i = 0; i < n; ++i) {
+    const x = (i * 2) / n - 1;
+    curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+  }
+  return curve;
+}
+
+function updatePhysics(spd) {
+  // Cambio automatico simulato semplice
+  if (spd < 1) {
+    gear = 1;
+    targetRpm = IDLE_RPM;
+    throttle = 0;
+  } else {
+    // Stima marcia da velocita
+    if (spd < 25) gear = 1;
+    else if (spd < 50) gear = 2;
+    else if (spd < 85) gear = 3;
+    else if (spd < 125) gear = 4;
+    else if (spd < 165) gear = 5;
+    else gear = 6;
+
+    const wheelCircMeters = 2.05; // 235/45 R18 tipico Model 3
+    const wheelRpm = (spd * 1000 / 60) / wheelCircMeters;
+    targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, wheelRpm * ratios[gear] * finalDrive));
+  }
+
+  // Throttle da delta velocita
+  const now = performance.now();
+  const dt = (now - lastTime) / 1000;
+  if (dt > 0.05) {
+    const accel = (spd - lastSpeed) / dt; // km/h al secondo
+    throttle = Math.max(0, Math.min(1, accel / 15)); // 15 km/h/s = full throttle
+    lastSpeed = spd;
+    lastTime = now;
+  }
+
+  // Interpolazione RPM fluida (inerzia motore)
+  currentRpm += (targetRpm - currentRpm) * 0.15;
+
+  if (actx && isRunning) {
+    // 5 cilindri 4-tempi: frequenza base = (RPM / 60) * (5 / 2) ? no, base albero = RPM / 60
+    const baseFreq = Math.max(15, currentRpm / 60);
+    oscs.forEach(o => {
+      o.osc.frequency.setTargetAtTime(baseFreq * o.mult, actx.currentTime, 0.03);
+    });
+    // Filtro scarico si apre con throttle e RPM
+    const cutoff = 400 + (currentRpm / MAX_RPM) * 3500 + throttle * 1500;
+    exhaustFilter.frequency.setTargetAtTime(cutoff, actx.currentTime, 0.04);
+    masterGain.gain.setTargetAtTime(0.3 + throttle * 0.5, actx.currentTime, 0.04);
+  }
+
+  // UI
+  document.getElementById('gear').textContent = spd < 1 ? 'P' : gear;
+  document.getElementById('rpm-val').childNodes[0].textContent = Math.round(currentRpm) + ' ';
+  document.getElementById('speed-num').textContent = Math.round(spd);
+  document.getElementById('bar-fill').style.width = Math.min(100, (currentRpm / MAX_RPM) * 100) + '%';
+}
+
+// Loop animazione
+function loop() {
+  updatePhysics(currentSpeed);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// GPS Tesla
+let geoWatchId = null;
+function startGps() {
+  if (!('geolocation' in navigator)) {
+    document.getElementById('gps-status').textContent = 'GPS non disponibile';
+    return;
+  }
+  geoWatchId = navigator.geolocation.watchPosition(
+    pos => {
+      const spdKmh = (pos.coords.speed || 0) * 3.6;
+      currentSpeed = Math.max(0, spdKmh);
+      document.getElementById('gps-status').textContent = `GPS: ±${Math.round(pos.coords.accuracy || 0)}m`;
+    },
+    err => {
+      document.getElementById('gps-status').textContent = 'GPS: ' + err.message;
+    },
+    { enableHighAccuracy: true, maximumAge: 500, timeout: 5000 }
+  );
+}
+
+// Controlli UI
+const pBtn = document.getElementById('power-btn');
+pBtn.addEventListener('click', async () => {
+  if (!isRunning) {
+    if (!actx) initAudio();
+    if (actx.state === 'suspended') await actx.resume();
+    startGps();
+    isRunning = true;
+    pBtn.textContent = 'SPEGNI MOTORE';
+    pBtn.classList.add('stop');
+    document.getElementById('diag').textContent = 'Motore acceso. Pronto per il browser Tesla.';
+  } else {
+    if (actx) actx.suspend();
+    if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
+    isRunning = false;
+    currentSpeed = 0;
+    pBtn.textContent = 'AVVIA MOTORE';
+    pBtn.classList.remove('stop');
+    document.getElementById('diag').textContent = 'Motore spento.';
+  }
+});
+
+// Slider manuale
+const sSlider = document.getElementById('sim-slider');
+sSlider.addEventListener('input', e => {
+  currentSpeed = parseFloat(e.target.value);
+  document.getElementById('sim-spd').textContent = currentSpeed;
+});
+</script>
+</body>
+</html>
