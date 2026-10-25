@@ -80,6 +80,7 @@ const sampleFiles = [
 ];
 
 let actx = null, isRunning = false;
+let rawAudioArrayBuffers = [];
 let audioBuffers = [];
 let sourceNodes = [], gainNodes = [];
 let masterGain, warbleGain, warbleOsc, popFilter;
@@ -309,7 +310,8 @@ function startGps() {
   );
 }
 
-  pBtn.addEventListener('click', async () => {
+const pBtn = document.getElementById('power-btn');
+pBtn.addEventListener('click', async () => {
     // Sblocca immediatamente AudioContext sincrono sul primo gesto iOS/Safari
     if (!actx) {
       const AC = window.AudioContext || window.webkitAudioContext;
