@@ -88,13 +88,12 @@ let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
 let gear = 1, throttle = 0, lastSpeed = 0, lastThrottle = 0, lastTime = performance.now();
 let geoWatchId = null;
 
-// Precarica i 6 loop WAV tramite arrayBuffer fetch pulito
-let rawAudioArrayBuffers = [];
+// Precarica i 6 loop WAV
 async function preloadSamples() {
   try {
     const promises = sampleFiles.map(async (file) => {
       const res = await fetch(file);
-      if (!res.ok) throw new Error(`HTTP ${res.status} caricando ${file}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} per ${file}`);
       return await res.arrayBuffer();
     });
     rawAudioArrayBuffers = await Promise.all(promises);
@@ -102,12 +101,22 @@ async function preloadSamples() {
     const btn = document.getElementById('power-btn');
     btn.disabled = false;
     btn.textContent = 'AVVIA MOTORE';
-    document.getElementById('diag').textContent = 'Campioni pronti. Premi AVVIA.';
+    document.getElementById('diag').textContent = 'Campioni pronti. Premi AVVIA MOTORE.';
   } catch (err) {
     document.getElementById('diag').textContent = 'Errore download suoni: ' + err.message;
   }
 }
 preloadSamples();
+
+// Helper per sbloccare audio su iOS Safari (supporto callback legacy + Promise)
+function decodeAudioCompat(context, arrayBuf) {
+  return new Promise((resolve, reject) => {
+    const res = context.decodeAudioData(arrayBuf, resolve, reject);
+    if (res && typeof res.then === 'function') {
+      res.then(resolve).catch(reject);
+    }
+  });
+}
 
 async function initAudioGraph() {
   if (!actx) {
@@ -118,18 +127,18 @@ async function initAudioGraph() {
     await actx.resume();
   }
 
-  // Decodifica i buffer dentro il contesto audio sbloccato dal tocco iOS
+  // Decodifica i buffer una sola volta dentro il click handler
   if (audioBuffers.length === 0) {
     document.getElementById('diag').textContent = 'Decodifica audio in corso...';
-    for (const raw of rawAudioArrayBuffers) {
-      // slice per conservare il buffer originale in caso di restart
-      const decoded = await actx.decodeAudioData(raw.slice(0));
-      audioBuffers.push(decoded);
+    for (let i = 0; i < rawAudioArrayBuffers.length; i++) {
+      const buf = await decodeAudioCompat(actx, rawAudioArrayBuffers[i].slice(0));
+      audioBuffers.push(buf);
     }
   }
 
   masterGain = actx.createGain();
-  masterGain.gain.setValueAtTime(0.8, actx.currentTime);
+  masterGain.gain.setValueAtTime(0.9, actx.currentTime);
+  masterGain.connect(actx.destination);
 
   sourceNodes = [];
   gainNodes = [];
@@ -140,7 +149,7 @@ async function initAudioGraph() {
     src.loop = true;
 
     const g = actx.createGain();
-    g.gain.setValueAtTime(0, actx.currentTime);
+    g.gain.setValueAtTime(0.0001, actx.currentTime);
 
     src.connect(g);
     g.connect(masterGain);
@@ -150,7 +159,8 @@ async function initAudioGraph() {
     src.start();
   });
 
-  masterGain.connect(actx.destination);
+  // Applica subito il volume corretto al minimo (RPM idle)
+  updateAudio(currentRpm, throttle);
 }
 
 // Scoppiettii di scarico al rilascio (pops & bangs)
@@ -299,35 +309,44 @@ function startGps() {
   );
 }
 
-const pBtn = document.getElementById('power-btn');
-pBtn.addEventListener('click', async () => {
-  if (!isRunning) {
-    pBtn.disabled = true;
-    pBtn.textContent = 'AVVIO IN CORSO...';
-    try {
-      await initAudioGraph();
-      startGps();
-      isRunning = true;
-      pBtn.textContent = 'SPEGNI MOTORE';
-      pBtn.classList.add('stop');
-      pBtn.disabled = false;
-      document.getElementById('diag').textContent = 'Motore attivo.';
-    } catch (e) {
-      pBtn.disabled = false;
-      pBtn.textContent = 'AVVIA MOTORE';
-      document.getElementById('diag').textContent = 'Errore avvio: ' + e.message;
+  pBtn.addEventListener('click', async () => {
+    // Sblocca immediatamente AudioContext sincrono sul primo gesto iOS/Safari
+    if (!actx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC();
     }
-  } else {
-    sourceNodes.forEach(s => { try { s.stop(); } catch(e){} });
-    sourceNodes = [];
-    if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
-    isRunning = false;
-    currentSpeed = 0;
-    pBtn.textContent = 'AVVIA MOTORE';
-    pBtn.classList.remove('stop');
-    document.getElementById('diag').textContent = 'Motore spento.';
-  }
-});
+    if (actx.state === 'suspended') {
+      await actx.resume();
+    }
+
+    if (!isRunning) {
+      pBtn.disabled = true;
+      pBtn.textContent = 'AVVIO IN CORSO...';
+      try {
+        await initAudioGraph();
+        startGps();
+        isRunning = true;
+        pBtn.textContent = 'SPEGNI MOTORE';
+        pBtn.classList.add('stop');
+        pBtn.disabled = false;
+        document.getElementById('diag').textContent = 'Motore attivo.';
+      } catch (e) {
+        pBtn.disabled = false;
+        pBtn.textContent = 'AVVIA MOTORE';
+        document.getElementById('diag').textContent = 'Errore avvio: ' + e.message;
+      }
+    } else {
+      sourceNodes.forEach(s => { try { s.stop(); } catch(e){} });
+      sourceNodes = [];
+      gainNodes = [];
+      if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
+      isRunning = false;
+      currentSpeed = 0;
+      pBtn.textContent = 'AVVIA MOTORE';
+      pBtn.classList.remove('stop');
+      document.getElementById('diag').textContent = 'Motore spento.';
+    }
+  });
 
 const sSlider = document.getElementById('sim-slider');
 sSlider.addEventListener('input', e => {
