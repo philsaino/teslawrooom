@@ -343,7 +343,7 @@ async function initAudioGraph() {
     src.start();
   });
 
-  updateAudio(currentRpm, throttle);
+  updateAudio(currentRpm, filteredThrottle);
 }
 
 function updateAudio(rpm, load) {
