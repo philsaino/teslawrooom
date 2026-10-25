@@ -258,34 +258,67 @@ let lastShiftTime = 0;
 let driveMode = 'ev';
 let geoWatchId = null;
 
-// Gestione arrivo nuovo dato di velocita (GPS o slider) con calcolo accelerazione filtrata
-function registerSpeedUpdate(spd) {
+// Telemetria per diagnostica dal vivo
+let gpsSampleCount = 0;
+let lastGpsSampleTimestamp = 0;
+let gpsHzDisplay = 0;
+let lastAccelKmhS = 0;
+
+function createAudioContext() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  // latencyHint: 'interactive' forza il buffer hardware al minimo assoluto supportato
+  return new AC({ latencyHint: 'interactive' });
+}
+
+// Gestione arrivo nuovo dato di velocita (GPS o slider)
+// Se isDirectInput = true (slider touch), bypassa i filtri di rate-limit per risposta immediata
+function registerSpeedUpdate(spd, isDirectInput = false) {
   const now = performance.now();
   const dt = (now - lastSpeedSampleTime) / 1000;
-  if (dt > 0.08) {
-    const rawAccel = (spd - lastSpeedSample) / dt; // km/h al secondo
-    const rawThrottle = Math.max(0, Math.min(1, rawAccel / 12));
-    // Filtro asimmetrico: sale veloce (alpha 0.4), scende lento (alpha 0.15) per simulare pedale
-    const alpha = rawThrottle > filteredThrottle ? 0.4 : 0.15;
-    filteredThrottle += (rawThrottle - filteredThrottle) * alpha;
-    lastSpeedSample = spd;
-    lastSpeedSampleTime = now;
+
+  if (isDirectInput) {
+    // Slider: risposta secca senza attendere dt minimo
+    if (dt > 0.01) {
+      const rawAccel = (spd - lastSpeedSample) / dt;
+      lastAccelKmhS = rawAccel;
+      const rawThrottle = Math.max(0, Math.min(1, rawAccel / 18));
+      // Inseguimento rapido su slider
+      filteredThrottle += (rawThrottle - filteredThrottle) * 0.5;
+      lastSpeedSample = spd;
+      lastSpeedSampleTime = now;
+    }
+  } else {
+    // GPS auto: telemetria Hz
+    gpsSampleCount++;
+    if (lastGpsSampleTimestamp > 0 && dt > 0) {
+      const instantHz = 1 / dt;
+      gpsHzDisplay = gpsHzDisplay === 0 ? instantHz : (gpsHzDisplay * 0.8 + instantHz * 0.2);
+    }
+    lastGpsSampleTimestamp = now;
+
+    if (dt > 0.04) {
+      const rawAccel = (spd - lastSpeedSample) / dt;
+      lastAccelKmhS = rawAccel;
+      const rawThrottle = Math.max(0, Math.min(1, rawAccel / 12));
+      const alpha = rawThrottle > filteredThrottle ? 0.45 : 0.15;
+      filteredThrottle += (rawThrottle - filteredThrottle) * alpha;
+      lastSpeedSample = spd;
+      lastSpeedSampleTime = now;
+    }
   }
   currentSpeed = Math.max(0, spd);
 }
 
-// Pre-caricamento e decodifica immediata all'avvio della pagina (non aspettiamo il click)
+// Pre-caricamento e decodifica immediata all'avvio della pagina
 async function preloadSamples() {
   try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    actx = new AC();
+    actx = createAudioContext();
 
     document.getElementById('diag').textContent = 'Scaricamento audio...';
     const fetchPromises = sampleFiles.map(async file => {
       const res = await fetch(file);
       if (!res.ok) throw new Error(`HTTP ${res.status} per ${file}`);
       const arrayBuf = await res.arrayBuffer();
-      // Decodifica in parallelo mentre scarica
       return await decodeAudioCompat(actx, arrayBuf);
     });
 
@@ -294,7 +327,7 @@ async function preloadSamples() {
     const btn = document.getElementById('power-btn');
     btn.disabled = false;
     btn.textContent = 'AVVIA MOTORE';
-    document.getElementById('diag').textContent = 'Audio pronto in RAM. Tocca AVVIA per partire.';
+    updateDiagStatus();
   } catch (err) {
     document.getElementById('diag').textContent = 'Errore suoni: ' + err.message;
   }
@@ -310,19 +343,29 @@ function decodeAudioCompat(context, arrayBuf) {
   });
 }
 
+function updateDiagStatus() {
+  const diagEl = document.getElementById('diag');
+  if (!diagEl) return;
+  if (!isRunning) {
+    diagEl.textContent = 'Audio pronto in RAM. Tocca AVVIA per partire.';
+    return;
+  }
+  const baseLat = actx && actx.baseLatency ? (actx.baseLatency * 1000).toFixed(0) : '?';
+  const outLat = actx && actx.outputLatency ? (actx.outputLatency * 1000).toFixed(0) : '?';
+  const hzText = gpsHzDisplay > 0 ? `${gpsHzDisplay.toFixed(1)} Hz` : 'attesa';
+  diagEl.textContent = `GPS: ${hzText} | Audio buffer: ${baseLat}ms (out: ${outLat}ms) | Gas virt: ${(filteredThrottle * 100).toFixed(0)}%`;
+}
+
 async function initAudioGraph() {
   if (!actx) {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    actx = new AC();
+    actx = createAudioContext();
   }
-  // Sblocco istantaneo
   if (actx.state === 'suspended') {
     await actx.resume();
   }
 
-  // Se per policy Safari non avesse decodificato prima, fallback
+  // Se non ancora decodificati (caso limite)
   if (audioBuffers.length === 0) {
-    document.getElementById('diag').textContent = 'Decodifica audio...';
     const fetchPromises = sampleFiles.map(async file => {
       const res = await fetch(file);
       const arrayBuf = await res.arrayBuffer();
@@ -344,7 +387,8 @@ async function initAudioGraph() {
     src.loop = true;
 
     const g = actx.createGain();
-    g.gain.setValueAtTime(0.0001, actx.currentTime);
+    // Imposta subito a 0 senza rampa differita
+    g.gain.setValueAtTime(0, actx.currentTime);
 
     src.connect(g);
     g.connect(masterGain);
@@ -354,15 +398,16 @@ async function initAudioGraph() {
     src.start();
   });
 
-  updateAudio(currentRpm, filteredThrottle);
+  // Applica subito i volumi per il minimo (800 RPM)
+  updateAudio(currentRpm, filteredThrottle, true);
 }
 
-function updateAudio(rpm, load) {
+function updateAudio(rpm, load, immediate = false) {
   if (!actx || sourceNodes.length === 0) return;
 
   const t = actx.currentTime;
-  // Costante di rampa dimezzata per risposta reattiva immediata al tocco/slider
-  const ramp = 0.018;
+  // Rampa a 8ms: impercettibile all'orecchio umano (< 1 frame video a 60fps), elimina ogni sensazione di lag
+  const ramp = immediate ? 0.001 : 0.008;
 
   let lowerIdx = 0;
   for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
@@ -433,8 +478,8 @@ function updatePhysics(spd) {
     }
   }
 
-  // Risposta fisica del motore indipendente dal framerate dello schermo Tesla: tau = 70ms (reattivo)
-  const rpmFollowFactor = 1 - Math.exp(-dt / 0.07);
+  // Inseguimento RPM reattivo: tau = 35ms (prima era 70ms). Al cambio marcia resta morbido, ma segue lo slider all'istante
+  const rpmFollowFactor = 1 - Math.exp(-dt / 0.035);
   currentRpm += (targetRpm - currentRpm) * rpmFollowFactor;
 
   if (isRunning) {
@@ -446,6 +491,7 @@ function updatePhysics(spd) {
   document.getElementById('rpm-val').textContent = Math.round(currentRpm);
   document.getElementById('speed-num').textContent = Math.round(spd);
   document.getElementById('bar-fill').style.width = Math.min(100, (currentRpm / MAX_RPM) * 100) + '%';
+  updateDiagStatus();
 }
 
 function loop() {
@@ -532,7 +578,7 @@ btnGear.addEventListener('click', () => {
 const sSlider = document.getElementById('sim-slider');
 sSlider.addEventListener('input', e => {
   const val = parseFloat(e.target.value);
-  registerSpeedUpdate(val);
+  registerSpeedUpdate(val, true); // true = input diretto a zero latenza
   document.getElementById('sim-spd').textContent = `${Math.round(val)} km/h`;
 });
 </script>
