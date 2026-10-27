@@ -201,9 +201,9 @@ header{
   <a href="probe.html" class="probe-link">Apri Test Sensori Tesla (probe.html)</a>
 </div>
 
-<script src="sounds/samples.js"></script>
+<script src="sounds/raw_audio.js"></script>
 <script>
-// ponytail: Motore campionato V12 (LaFerrari/Defender/Chevy) via Web Audio API
+// ponytail: Motore audio PCM Float32 nativo (zero decodeAudioData, compatibile Safari/Tesla/Chrome)
 const IDLE_RPM = 900, MAX_RPM = 8500;
 
 let actx = null, isRunning = false;
@@ -223,53 +223,27 @@ let midNode = null, midGain = null;
 let highNode = null, highGain = null;
 let audioBuffers = {};
 
-function base64ToArrayBuffer(base64) {
-  const binaryString = atob(base64.replace(/^data:audio\/\w+;base64,/, ''));
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
+function createAudioBufferFromRaw(ctx, rawEntry) {
+  // Crea AudioBuffer nativo in modo 100% sincrono senza codec né promesse
+  const buf = ctx.createBuffer(1, rawEntry.length, rawEntry.rate);
+  buf.copyToChannel(rawEntry.data, 0);
+  return buf;
 }
 
-function decodeAudioDataSafe(ctx, arrayBuffer) {
-  return new Promise((resolve, reject) => {
-    // Gestione ibrida sia callback legacy (WebKit/Safari) che promise standard (Chromium)
-    const res = ctx.decodeAudioData(
-      arrayBuffer,
-      buf => resolve(buf),
-      err => reject(err || new Error('decodeAudioData failed'))
-    );
-    if (res && typeof res.then === 'function') {
-      res.then(resolve).catch(reject);
-    }
-  });
-}
-
-async function loadSampleBuffer(ctx, base64Data) {
-  const ab = base64ToArrayBuffer(base64Data);
-  return await decodeAudioDataSafe(ctx, ab);
-}
-
-async function initAudioEngine() {
+function initAudioEngine() {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) throw new Error('Web Audio non supportato');
   
-  const ctx = new AC({ latencyHint: 'interactive' });
+  const ctx = new AC();
+  // Sblocca immediatamente l'audio su Safari
   if (ctx.state === 'suspended') {
-    await ctx.resume();
+    ctx.resume();
   }
 
-  // Caricamento parallelo dai dati base64 sincroni (zero fetch di rete)
-  const [bIdle, bMid, bHigh] = await Promise.all([
-    loadSampleBuffer(ctx, ENGINE_SAMPLES.idle),
-    loadSampleBuffer(ctx, ENGINE_SAMPLES.mid),
-    loadSampleBuffer(ctx, ENGINE_SAMPLES.high)
-  ]);
-  audioBuffers.idle = bIdle;
-  audioBuffers.mid = bMid;
-  audioBuffers.high = bHigh;
+  // Costruzione istantanea sincrona dei buffer audio dai vettori Float32
+  audioBuffers.idle = createAudioBufferFromRaw(ctx, RAW_ENGINE_AUDIO.idle);
+  audioBuffers.mid  = createAudioBufferFromRaw(ctx, RAW_ENGINE_AUDIO.mid);
+  audioBuffers.high = createAudioBufferFromRaw(ctx, RAW_ENGINE_AUDIO.high);
 
   masterGain = ctx.createGain();
   masterGain.gain.setValueAtTime(0.9, ctx.currentTime);
@@ -284,7 +258,7 @@ async function initAudioEngine() {
   idleNode.loop = true;
   idleNode.playbackRate.setValueAtTime(1.0, ctx.currentTime);
   idleNode.connect(idleGain);
-  idleNode.start();
+  idleNode.start(0);
 
   // 2. Mid
   midGain = ctx.createGain();
@@ -295,7 +269,7 @@ async function initAudioEngine() {
   midNode.loop = true;
   midNode.playbackRate.setValueAtTime(1.0, ctx.currentTime);
   midNode.connect(midGain);
-  midNode.start();
+  midNode.start(0);
 
   // 3. High
   highGain = ctx.createGain();
@@ -306,7 +280,7 @@ async function initAudioEngine() {
   highNode.loop = true;
   highNode.playbackRate.setValueAtTime(1.0, ctx.currentTime);
   highNode.connect(highGain);
-  highNode.start();
+  highNode.start(0);
 
   actx = ctx;
   updateAudioEngine(currentRpm, filteredThrottle, true);
@@ -457,14 +431,13 @@ function startGps() {
 }
 
 const pBtn = document.getElementById('power-btn');
-pBtn.addEventListener('click', async () => {
+pBtn.addEventListener('click', () => {
   try {
     if (!actx) {
-      pBtn.textContent = 'CARICAMENTO...';
-      await initAudioEngine();
+      initAudioEngine();
     }
     if (actx && actx.state === 'suspended') {
-      await actx.resume();
+      actx.resume();
     }
 
     if (!isRunning) {
