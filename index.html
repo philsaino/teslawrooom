@@ -168,7 +168,7 @@ header{
 <body>
 
 <header>
-  <div>TESLA WROOOM • V12 ITALIANO</div>
+  <div>TESLA WROOOM</div>
   <div class="badge" id="gps-status">GPS IN ATTESA</div>
 </header>
 
@@ -189,7 +189,7 @@ header{
 </div>
 
 <div class="dashboard-controls">
-  <button id="power-btn" class="btn-power">AVVIA V12</button>
+  <button id="power-btn" class="btn-power">AVVIA MOTORE</button>
 
   <div class="sim-box">
     <span>TEST BANCO:</span>
@@ -197,12 +197,13 @@ header{
     <span id="sim-spd" style="min-width:65px">0 km/h</span>
   </div>
 
-  <div class="status-line" id="diag">Zero file audio • Sintesi procedurale V12 in tempo reale</div>
+  <div class="status-line" id="diag">Doppio loop campionato (Idle/Drive) • Campioni reali PCM</div>
   <a href="probe.html" class="probe-link">Apri Test Sensori Tesla (probe.html)</a>
 </div>
 
+<script src="sounds/samples.js"></script>
 <script>
-// ponytail: Motore procedurale V12 italiano (6 accensioni/giro, zero WAV, zero attesa caricamento)
+// ponytail: Motore campionato V12 (LaFerrari/Defender/Chevy) via Web Audio API
 const IDLE_RPM = 900, MAX_RPM = 8500;
 
 let actx = null, isRunning = false;
@@ -215,134 +216,83 @@ let gpsSampleCount = 0;
 let lastGpsSampleTimestamp = 0;
 let gpsHzDisplay = 0;
 
-// Nodi audio sintetizzatore V12
+// Motore audio a campioni reali (PCM single-cycle/loops)
 let masterGain = null;
-let distNode = null;
-let lowpassFilter = null;
-let oscNodes = []; // { osc, gain, harmonic, baseGain }
-let intakeNoiseNode = null;
-let intakeFilter = null;
-let intakeGain = null;
+let idleNode = null, idleGain = null;
+let driveNode = null, driveGain = null;
+let subGain = null, subFilter = null, lowSubNode = null;
+let audioBuffers = {};
 
-function createDistortionCurve(k = 8) {
-  // Curva di saturazione a stato solido / scarico sportivo
-  const n = 1024;
-  const curve = new Float32Array(n);
-  const deg = Math.PI / 180;
-  for (let i = 0; i < n; i++) {
-    const x = (i * 2) / n - 1;
-    curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
-  }
-  return curve;
+async function loadSampleBuffer(ctx, base64Data) {
+  const res = await fetch(base64Data);
+  const ab = await res.arrayBuffer();
+  return await ctx.decodeAudioData(ab);
 }
 
-function buildWhiteNoiseBuffer(ctx) {
-  const bufferSize = ctx.sampleRate * 2; // 2 secondi in loop
-  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < bufferSize; i++) {
-    data[i] = Math.random() * 2 - 1;
-  }
-  return buffer;
-}
-
-function initSynth() {
+async function initAudioEngine() {
   const AC = window.AudioContext || window.webkitAudioContext;
   actx = new AC({ latencyHint: 'interactive' });
 
   masterGain = actx.createGain();
-  masterGain.gain.setValueAtTime(0.75, actx.currentTime);
-
-  // Distorsione scarico
-  distNode = actx.createWaveShaper();
-  distNode.curve = createDistortionCurve(10);
-  distNode.oversample = 'none'; // massime performance MCU2
-
-  // Filtro principale scarico (apre con gli RPM)
-  lowpassFilter = actx.createBiquadFilter();
-  lowpassFilter.type = 'lowpass';
-  lowpassFilter.frequency.setValueAtTime(2500, actx.currentTime);
-  lowpassFilter.Q.setValueAtTime(1.5, actx.currentTime);
-
-  distNode.connect(lowpassFilter);
-  lowpassFilter.connect(masterGain);
+  masterGain.gain.setValueAtTime(0.85, actx.currentTime);
   masterGain.connect(actx.destination);
 
-  // Armoniche tipiche V12 aspirato (frequenza base f0 = RPM/60)
-  // Per un 4 tempi a 12 cilindri, l'ordine dominante e' l'ordine 6 (6 scoppi per giro motore),
-  // seguito dai suoi multipli (12, 18, 24) e da ordini meccanici (1, 2, 3, 4).
-  const harmonicProfile = [
-    { order: 1.0,  type: 'sawtooth', baseVol: 0.12, loadBonus: 0.05 },
-    { order: 2.0,  type: 'triangle', baseVol: 0.15, loadBonus: 0.05 },
-    { order: 3.0,  type: 'sawtooth', baseVol: 0.20, loadBonus: 0.10 },
-    { order: 6.0,  type: 'sawtooth', baseVol: 0.65, loadBonus: 0.50 }, // Armonica principale V12
-    { order: 12.0, type: 'sawtooth', baseVol: 0.35, loadBonus: 0.40 }, // Urlo ad alti regimi
-    { order: 18.0, type: 'triangle', baseVol: 0.15, loadBonus: 0.25 },
-    { order: 24.0, type: 'sine',     baseVol: 0.08, loadBonus: 0.20 }
-  ];
+  // Caricamento parallelo dei sample incorporati
+  const [bIdle, bDrive] = await Promise.all([
+    loadSampleBuffer(actx, ENGINE_SAMPLES.v8_idle),
+    loadSampleBuffer(actx, ENGINE_SAMPLES.v8_drive)
+  ]);
+  audioBuffers.idle = bIdle;
+  audioBuffers.drive = bDrive;
 
-  oscNodes = harmonicProfile.map(spec => {
-    const osc = actx.createOscillator();
-    osc.type = spec.type;
-    const g = actx.createGain();
-    g.gain.setValueAtTime(spec.baseVol * 0.1, actx.currentTime);
+  // Nodo Idle (minimo con bassi caldi e pulsazioni reali)
+  idleGain = actx.createGain();
+  idleGain.gain.setValueAtTime(1.0, actx.currentTime);
+  idleGain.connect(masterGain);
 
-    osc.connect(g);
-    g.connect(distNode);
-    osc.start();
-    return { osc, gain: g, spec };
-  });
+  idleNode = actx.createBufferSource();
+  idleNode.buffer = audioBuffers.idle;
+  idleNode.loop = true;
+  idleNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
+  idleNode.connect(idleGain);
+  idleNode.start();
 
-  // Sintesi rumore aspirazione (Air intake hiss & growl)
-  const noiseBuf = buildWhiteNoiseBuffer(actx);
-  intakeNoiseNode = actx.createBufferSource();
-  intakeNoiseNode.buffer = noiseBuf;
-  intakeNoiseNode.loop = true;
+  // Nodo Drive (carico e accelerazione corposa)
+  driveGain = actx.createGain();
+  driveGain.gain.setValueAtTime(0.0, actx.currentTime);
+  driveGain.connect(masterGain);
 
-  intakeFilter = actx.createBiquadFilter();
-  intakeFilter.type = 'bandpass';
-  intakeFilter.frequency.setValueAtTime(450, actx.currentTime);
-  intakeFilter.Q.setValueAtTime(3.0, actx.currentTime);
+  driveNode = actx.createBufferSource();
+  driveNode.buffer = audioBuffers.drive;
+  driveNode.loop = true;
+  driveNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
+  driveNode.connect(driveGain);
+  driveNode.start();
 
-  intakeGain = actx.createGain();
-  intakeGain.gain.setValueAtTime(0.001, actx.currentTime);
-
-  intakeNoiseNode.connect(intakeFilter);
-  intakeFilter.connect(intakeGain);
-  intakeGain.connect(masterGain);
-  intakeNoiseNode.start();
-
-  updateSynthAudio(currentRpm, filteredThrottle, true);
+  updateAudioEngine(currentRpm, filteredThrottle, true);
 }
 
-function updateSynthAudio(rpm, load, immediate = false) {
-  if (!actx || oscNodes.length === 0) return;
+function updateAudioEngine(rpm, load, immediate = false) {
+  if (!actx || !idleNode || !driveNode) return;
 
   const t = actx.currentTime;
-  const ramp = immediate ? 0.002 : 0.012;
+  const ramp = immediate ? 0.005 : 0.025;
 
-  // Frequenza di rotazione motore: f0 = RPM / 60
-  const f0 = rpm / 60;
+  // Base rate a 900 RPM: 1.0x
+  // Pitch scala in base agli RPM
+  const pitchFactor = Math.max(0.6, Math.min(3.8, rpm / IDLE_RPM));
+  idleNode.playbackRate.setTargetAtTime(pitchFactor, t, ramp);
+  driveNode.playbackRate.setTargetAtTime(pitchFactor, t, ramp);
 
-  // Aggiorna frequenze e ampiezze di ciascuna armonica del V12
-  oscNodes.forEach(({ osc, gain, spec }) => {
-    const targetFreq = Math.max(20, Math.min(18000, f0 * spec.order));
-    osc.frequency.setTargetAtTime(targetFreq, t, ramp);
+  // Crossfade intelligente:
+  // Al minimo o decelerazione (load basso): prevale idleNode (suono profondo e borbottante)
+  // Sotto gas/carico: entra driveNode con punch ed enfasi di scoppio
+  const loadClamped = Math.max(0, Math.min(1, load));
+  const driveMix = Math.min(1, Math.max(0, (loadClamped * 1.4) + (rpm - IDLE_RPM) / 4500));
+  const idleMix = Math.max(0.15, 1.0 - driveMix * 0.85);
 
-    // Con il carico aumentano le armoniche alte e l'aggressivita del timbro
-    const vol = (spec.baseVol + spec.loadBonus * load) * (0.35 + (rpm / MAX_RPM) * 0.65);
-    gain.gain.setTargetAtTime(vol, t, ramp);
-  });
-
-  // Filtro scarico: a 900 RPM taglia a ~1000Hz (cupo al minimo), a 8500 RPM apre a ~8000Hz (urlo V12)
-  const cutoff = 900 + (rpm / MAX_RPM) * 7200 + (load * 1200);
-  lowpassFilter.frequency.setTargetAtTime(Math.min(14000, cutoff), t, ramp);
-
-  // Rumore aspirazione: sale proporzionalmente a carico del gas e giri
-  const intakeFreq = 350 + (rpm / MAX_RPM) * 1200;
-  intakeFilter.frequency.setTargetAtTime(intakeFreq, t, ramp);
-  const intakeVol = (0.01 + load * 0.22) * (0.4 + (rpm / MAX_RPM) * 0.6);
-  intakeGain.gain.setTargetAtTime(intakeVol, t, ramp);
+  idleGain.gain.setTargetAtTime(idleMix * 0.9, t, ramp);
+  driveGain.gain.setTargetAtTime(driveMix * 1.1, t, ramp);
 }
 
 function registerSpeedUpdate(spd, isDirectInput = false) {
@@ -381,7 +331,7 @@ function updateDiagStatus() {
   const diagEl = document.getElementById('diag');
   if (!diagEl) return;
   if (!isRunning) {
-    diagEl.textContent = 'Zero file audio • Sintesi procedurale V12 in tempo reale';
+    diagEl.textContent = 'Doppio loop campionato (Idle/Drive) • Campioni reali PCM';
     return;
   }
   const baseLat = actx && actx.baseLatency ? (actx.baseLatency * 1000).toFixed(0) : '?';
@@ -415,7 +365,7 @@ function updatePhysics(spd) {
   currentRpm += (targetRpm - currentRpm) * rpmFollowFactor;
 
   if (isRunning) {
-    updateSynthAudio(currentRpm, filteredThrottle);
+    updateAudioEngine(currentRpm, filteredThrottle);
   }
 
   document.getElementById('gear-badge').textContent = (spd < 1) ? 'P' : 'D';
@@ -452,7 +402,8 @@ function startGps() {
 const pBtn = document.getElementById('power-btn');
 pBtn.addEventListener('click', async () => {
   if (!actx) {
-    initSynth();
+    pBtn.textContent = 'CARICAMENTO...';
+    await initAudioEngine();
   }
   if (actx.state === 'suspended') {
     await actx.resume();
@@ -461,16 +412,16 @@ pBtn.addEventListener('click', async () => {
   if (!isRunning) {
     startGps();
     isRunning = true;
-    pBtn.textContent = 'SPEGNI V12';
+    pBtn.textContent = 'SPEGNI MOTORE';
     pBtn.classList.add('stop');
-    document.getElementById('diag').textContent = 'V12 in esecuzione.';
+    document.getElementById('diag').textContent = 'Motore in esecuzione.';
   } else {
     if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
     isRunning = false;
     currentSpeed = 0;
-    pBtn.textContent = 'AVVIA V12';
+    pBtn.textContent = 'AVVIA MOTORE';
     pBtn.classList.remove('stop');
-    document.getElementById('diag').textContent = 'V12 spento.';
+    document.getElementById('diag').textContent = 'Motore spento.';
     if (actx) actx.suspend();
   }
 });
