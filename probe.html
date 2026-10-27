@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Probe - Browser Tesla</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0c;color:#fff;font-family:sans-serif;padding:16px;max-width:600px;margin:0 auto}
+h1{font-size:20px;margin:16px 0}
+h2{font-size:16px;color:#ff3b30;margin:24px 0 8px}
+section{background:#1c1c1e;border-radius:10px;padding:12px;margin-bottom:12px}
+.value{font-family:monospace;color:#30d158}
+.timestamp{font-size:11px;color:#666}
+#log{background:#000;color:#ccc;font-family:monospace;font-size:11px;height:150px;overflow-y:auto;padding:8px;margin-top:8px;border-radius:6px;white-space:pre-wrap}
+button{background:#ff3b30;color:#fff;border:0;padding:10px 20px;border-radius:8px;font-size:14px;margin-top:10px}
+button:disabled{opacity:.5}
+</style>
+</head>
+<body>
+
+<h1>Probe - Browser Tesla</h1>
+
+<section id="api">
+  <h2>API Disponibili</h2>
+  <div id="api-list"></div>
+</section>
+
+<section id="gps">
+  <h2>Geolocation</h2>
+  <div>Stato: <span id="gps-status" class="value">non avviato</span></div>
+  <div>Velocità: <span id="gps-speed" class="value">--</span> km/h</div>
+  <div>Accuracy: <span id="gps-acc" class="value">--</span> m</div>
+  <div>Altitudine: <span id="gps-alt" class="value">--</span> m</div>
+  <div>Heading: <span id="gps-head" class="value">--</span>°</div>
+  <div>Latitudine: <span id="gps-lat" class="value">--</span></div>
+  <div>Longitudine: <span id="gps-lon" class="value">--</span></div>
+  <button id="gps-toggle">Avvia GPS</button>
+</section>
+
+<section id="devicemotion">
+  <h2>DeviceMotion (accelerometro)</h2>
+  <div>Supportato: <span id="motion-support" class="value">--</span></div>
+  <div id="motion-data" style="display:none">
+    X: <span id="accel-x" class="value">--</span> m/s²<br>
+    Y: <span id="accel-y" class="value">--</span> m/s²<br>
+    Z: <span id="accel-z" class="value">--</span> m/s²
+  </div>
+  <button id="motion-toggle" disabled>Avvia DeviceMotion</button>
+</section>
+
+<section id="audio">
+  <h2>Web Audio API</h2>
+  <div>Base Latency: <span id="audio-base" class="value">--</span> ms</div>
+  <div>Output Latency: <span id="audio-out" class="value">--</span> ms</div>
+  <div>Sample Rate: <span id="audio-rate" class="value">--</span> Hz</div>
+</section>
+
+<section id="stats">
+  <h2>Telemetria GPS (30s)</h2>
+  <div>Campioni: <span id="stat-samples" class="value">0</span></div>
+  <div>Frequenza media: <span id="stat-hz" class="value">--</span> Hz</div>
+  <div>Accuracy media: <span id="stat-acc" class="value">--</span> m</div>
+  <div>Altitudine media: <span id="stat-alt" class="value">--</span> m</div>
+  <button id="reset-stats">Reset stats</button>
+</section>
+
+<section id="log">
+  <h2>Log</h2>
+  <div id="log"></div>
+</section>
+
+<script>
+const logEl = document.getElementById('log');
+const log = (...args) => {
+  const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+  logEl.textContent += `[${new Date().toISOString().split('T')[1].split('.')[0]}] ${msg}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+};
+
+// API check
+const apiList = document.getElementById('api-list');
+const checks = [
+  ['geolocation', 'Geolocation API'],
+  ['DeviceMotionEvent', 'DeviceMotion (accelerometro)'],
+  ['DeviceOrientationEvent', 'DeviceOrientation (bussola)'],
+  ['navigator.getGamepads', 'Gamepad API'],
+  ['navigator.connection', 'Network Information'],
+  ['navigator.battery', 'Battery API'],
+  ['navigator.mediaDevices', 'Media Devices (camera/mic)'],
+  ['screen.orientation', 'Screen Orientation'],
+  ['localStorage', 'LocalStorage'],
+  ['sessionStorage', 'SessionStorage'],
+  ['performance.memory', 'Memory Info']
+];
+
+let apiCount = 0;
+checks.forEach(([prop, name]) => {
+  const exists = prop.split('.').reduce((o, p) => o && o[p], window) !== undefined;
+  if (exists) apiCount++;
+  const div = document.createElement('div');
+  div.innerHTML = `<span>${name}</span> <span class="value">${exists ? 'Sì' : 'No'}</span>`;
+  apiList.appendChild(div);
+});
+document.querySelector('#api h2').textContent += ` (${apiCount}/${checks.length})`;
+log(`API check: ${apiCount} disponibili su ${checks.length}`);
+
+// Web Audio
+function probeAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  const base = (ctx.baseLatency || 0) * 1000;
+  const out = (ctx.outputLatency || 0) * 1000;
+  document.getElementById('audio-base').textContent = base.toFixed(1);
+  document.getElementById('audio-out').textContent = out.toFixed(1);
+  document.getElementById('audio-rate').textContent = ctx.sampleRate;
+  log(`Audio: base=${base.toFixed(1)}ms, out=${out.toFixed(1)}ms, rate=${ctx.sampleRate}Hz`);
+}
+probeAudio();
+
+// Geolocation
+const gpsBtn = document.getElementById('gps-toggle');
+let watchId = null;
+let samples = [];
+let lastGpsTime = 0;
+
+function updateGpsUI(pos) {
+  const c = pos.coords;
+  document.getElementById('gps-status').textContent = 'Attivo';
+  document.getElementById('gps-speed').textContent = c.speed ? (c.speed * 3.6).toFixed(1) : '--';
+  document.getElementById('gps-acc').textContent = c.accuracy ? c.accuracy.toFixed(0) : '--';
+  document.getElementById('gps-alt').textContent = c.altitude !== null ? c.altitude.toFixed(1) : '--';
+  document.getElementById('gps-head').textContent = c.heading !== null ? c.heading.toFixed(0) : '--';
+  document.getElementById('gps-lat').textContent = c.latitude.toFixed(6);
+  document.getElementById('gps-lon').textContent = c.longitude.toFixed(6);
+
+  // Campionamento per statistica
+  const now = performance.now();
+  const dt = lastGpsTime > 0 ? (now - lastGpsTime) / 1000 : null;
+  lastGpsTime = now;
+  if (c.speed !== null) {
+    samples.push({ speed: c.speed * 3.6, acc: c.accuracy, alt: c.altitude, dt });
+  }
+}
+
+gpsBtn.addEventListener('click', () => {
+  if (watchId) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    gpsBtn.textContent = 'Avvia GPS';
+    document.getElementById('gps-status').textContent = 'Fermo';
+  } else {
+    gpsBtn.textContent = 'Ferma GPS';
+    watchId = navigator.geolocation.watchPosition(
+      pos => {
+        updateGpsUI(pos);
+        log(`GPS: ${pos.coords.speed ? (pos.coords.speed * 3.6).toFixed(1) : '--'} km/h, acc ${pos.coords.accuracy.toFixed(0)}m`);
+      },
+      err => {
+        document.getElementById('gps-status').textContent = 'Errore: ' + err.message;
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+    );
+  }
+});
+
+// DeviceMotion
+const motionBtn = document.getElementById('motion-toggle');
+const motionSupport = document.getElementById('motion-support');
+const motionData = document.getElementById('motion-data');
+
+if (window.DeviceMotionEvent !== undefined) {
+  motionSupport.textContent = 'Sì';
+  motionBtn.disabled = false;
+  let motionId = null;
+
+  motionBtn.addEventListener('click', () => {
+    if (motionId) {
+      window.removeEventListener('devicemotion', handleMotion);
+      motionId = null;
+      motionBtn.textContent = 'Avvia DeviceMotion';
+      motionData.style.display = 'none';
+    } else {
+      motionBtn.textContent = 'Ferma DeviceMotion';
+      motionData.style.display = 'block';
+      motionId = 1;
+      window.addEventListener('devicemotion', handleMotion);
+    }
+  });
+
+  function handleMotion(e) {
+    const a = e.acceleration;
+    if (a) {
+      document.getElementById('accel-x').textContent = a.x.toFixed(2);
+      document.getElementById('accel-y').textContent = a.y.toFixed(2);
+      document.getElementById('accel-z').textContent = a.z.toFixed(2);
+    }
+  }
+} else {
+  motionSupport.textContent = 'No';
+}
+
+// Stats
+const resetBtn = document.getElementById('reset-stats');
+resetBtn.addEventListener('click', () => {
+  samples = [];
+  lastGpsTime = 0;
+  document.getElementById('stat-samples').textContent = '0';
+  document.getElementById('stat-hz').textContent = '--';
+  document.getElementById('stat-acc').textContent = '--';
+  document.getElementById('stat-alt').textContent = '--';
+  log('Stats reset');
+});
+
+// Auto-aggiornamento stats (ogni 30s o a fine sessione)
+let lastStatUpdate = performance.now();
+setInterval(() => {
+  const elapsed = (performance.now() - lastStatUpdate) / 1000;
+  if (elapsed >= 30 || (lastStatUpdate > 0 && samples.length === 0)) {
+    lastStatUpdate = performance.now();
+    if (samples.length > 0) {
+      const count = samples.length;
+      const hzs = samples.map(s => s.dt).filter(d => d > 0).map(d => 1/d);
+      const avgHz = hzs.length ? (hzs.reduce((a,b) => a+b, 0) / hzs.length).toFixed(2) : '--';
+      const avgAcc = (samples.reduce((a,b) => a + b.acc, 0) / count).toFixed(0);
+      const avgAlt = (samples.filter(s => s.alt !== null).reduce((a,b) => a + b.alt, 0) / samples.filter(s => s.alt !== null).length).toFixed(1);
+      document.getElementById('stat-samples').textContent = count;
+      document.getElementById('stat-hz').textContent = avgHz;
+      document.getElementById('stat-acc').textContent = avgAcc;
+      document.getElementById('stat-alt').textContent = avgAlt;
+    }
+  }
+}, 1000);
+
+log('Probe caricato');
+</script>
+</body>
+</html>
