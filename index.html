@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Tesla Wrooom</title>
+<title>Tesla Wrooom - V12</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none}
 body{
@@ -13,7 +13,7 @@ body{
   height:100vh;
   display:grid;
   grid-template-rows:auto 1fr auto;
-  padding:28px 36px;
+  padding:24px 32px;
   overflow:hidden;
 }
 
@@ -21,26 +21,26 @@ header{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  font-size:16px;
-  font-weight:600;
+  font-size:15px;
+  font-weight:700;
   letter-spacing:1px;
   color:#8e8e93;
 }
 .badge{
   background:#1c1c1e;
-  padding:8px 16px;
-  border-radius:20px;
-  font-size:14px;
+  padding:6px 14px;
+  border-radius:18px;
+  font-size:13px;
   color:#30d158;
 }
 
-/* Cluster centrale tipo cockpit Tesla */
+/* Cockpit Tesla */
 .cluster{
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:18px;
+  gap:14px;
 }
 .speed-display{
   display:flex;
@@ -55,7 +55,7 @@ header{
   font-variant-numeric:tabular-nums;
 }
 .speed-unit{
-  font-size:28px;
+  font-size:26px;
   font-weight:600;
   color:#8e8e93;
 }
@@ -63,61 +63,61 @@ header{
 .rpm-container{
   display:flex;
   align-items:center;
-  gap:16px;
+  gap:14px;
   font-size:22px;
-  font-weight:600;
+  font-weight:700;
   color:#a1a1a6;
 }
 #rpm-val{
-  font-size:32px;
-  font-weight:700;
+  font-size:36px;
+  font-weight:800;
   color:#fff;
   font-variant-numeric:tabular-nums;
 }
 #gear-badge{
-  background:#30d158;
-  color:#000;
-  padding:4px 14px;
+  background:#ff3b30;
+  color:#fff;
+  padding:3px 12px;
   border-radius:8px;
   font-weight:800;
-  font-size:20px;
+  font-size:18px;
+  letter-spacing:1px;
 }
 
-/* Barra contagiri */
+/* Barra contagiri tipo V12 (fino a 8500 RPM) */
 .bar-track{
   width:100%;
   max-width:720px;
-  height:18px;
+  height:16px;
   background:#1c1c1e;
-  border-radius:9px;
+  border-radius:8px;
   overflow:hidden;
   box-shadow:inset 0 1px 3px rgba(0,0,0,0.8);
 }
 #bar-fill{
   height:100%;
   width:0%;
-  background:linear-gradient(90deg,#30d158 0%,#ffd60a 70%,#ff3b30 95%);
-  transition:width .05s linear;
+  background:linear-gradient(90deg,#30d158 0%,#ffd60a 65%,#ff3b30 88%);
+  transition:width .04s linear;
 }
 
-/* Pannello comandi */
+/* Controlli */
 .dashboard-controls{
   display:flex;
   flex-direction:column;
   align-items:center;
-  gap:16px;
+  gap:14px;
   width:100%;
   max-width:720px;
   margin:0 auto;
 }
 
-/* Pulsantone Avvia/Spegni */
 .btn-power{
   width:100%;
-  padding:22px;
+  padding:20px;
   font-size:22px;
   font-weight:800;
-  letter-spacing:1px;
+  letter-spacing:1.5px;
   border:0;
   border-radius:16px;
   background:#ff3b30;
@@ -132,10 +132,6 @@ header{
 .btn-power.stop{
   background:#2c2c2e;
   box-shadow:none;
-}
-.btn-power:disabled{
-  opacity:0.4;
-  cursor:not-allowed;
 }
 
 /* Slider test banco */
@@ -172,7 +168,7 @@ header{
 <body>
 
 <header>
-  <div>TESLA WROOOM</div>
+  <div>TESLA WROOOM • V12 ITALIANO</div>
   <div class="badge" id="gps-status">GPS IN ATTESA</div>
 </header>
 
@@ -184,7 +180,7 @@ header{
 
   <div class="rpm-container">
     <span id="gear-badge">P</span>
-    <span><span id="rpm-val">800</span> RPM</span>
+    <span><span id="rpm-val">900</span> RPM</span>
   </div>
 
   <div class="bar-track">
@@ -193,7 +189,7 @@ header{
 </div>
 
 <div class="dashboard-controls">
-  <button id="power-btn" class="btn-power" disabled>CARICAMENTO AUDIO...</button>
+  <button id="power-btn" class="btn-power">AVVIA V12</button>
 
   <div class="sim-box">
     <span>TEST BANCO:</span>
@@ -201,30 +197,15 @@ header{
     <span id="sim-spd" style="min-width:65px">0 km/h</span>
   </div>
 
-  <div class="status-line" id="diag">Download campioni...</div>
+  <div class="status-line" id="diag">Zero file audio • Sintesi procedurale V12 in tempo reale</div>
   <a href="probe.html" class="probe-link">Apri Test Sensori Tesla (probe.html)</a>
 </div>
 
 <script>
-// ponytail: architettura pura mono-marcia EV con modulazione continua su carico e velocita
-const IDLE_RPM = 800, MAX_RPM = 5200;
-
-// Frequenze misurate dei 6 loop WAV: 42.8Hz, 58.8Hz, 61.3Hz, 64.9Hz, 68.8Hz, 73.0Hz
-// Rapportate in RPM equivalenti (combustione motore 4 tempi):
-const sampleRpmPoints = [800, 1100, 1150, 1220, 1290, 1370];
-const sampleFiles = [
-  'sounds/loop_0.wav',
-  'sounds/loop_1.wav',
-  'sounds/loop_2.wav',
-  'sounds/loop_3.wav',
-  'sounds/loop_4.wav',
-  'sounds/loop_5.wav'
-];
+// ponytail: Motore procedurale V12 italiano (6 accensioni/giro, zero WAV, zero attesa caricamento)
+const IDLE_RPM = 900, MAX_RPM = 8500;
 
 let actx = null, isRunning = false;
-let audioBuffers = [];
-let sourceNodes = [], gainNodes = [];
-let masterGain = null;
 let currentSpeed = 0, targetRpm = IDLE_RPM, currentRpm = IDLE_RPM;
 let filteredThrottle = 0;
 let lastSpeedSample = 0, lastSpeedSampleTime = performance.now();
@@ -234,9 +215,134 @@ let gpsSampleCount = 0;
 let lastGpsSampleTimestamp = 0;
 let gpsHzDisplay = 0;
 
-function createAudioContext() {
+// Nodi audio sintetizzatore V12
+let masterGain = null;
+let distNode = null;
+let lowpassFilter = null;
+let oscNodes = []; // { osc, gain, harmonic, baseGain }
+let intakeNoiseNode = null;
+let intakeFilter = null;
+let intakeGain = null;
+
+function createDistortionCurve(k = 8) {
+  // Curva di saturazione a stato solido / scarico sportivo
+  const n = 1024;
+  const curve = new Float32Array(n);
+  const deg = Math.PI / 180;
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+  }
+  return curve;
+}
+
+function buildWhiteNoiseBuffer(ctx) {
+  const bufferSize = ctx.sampleRate * 2; // 2 secondi in loop
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  return buffer;
+}
+
+function initSynth() {
   const AC = window.AudioContext || window.webkitAudioContext;
-  return new AC({ latencyHint: 'interactive' });
+  actx = new AC({ latencyHint: 'interactive' });
+
+  masterGain = actx.createGain();
+  masterGain.gain.setValueAtTime(0.75, actx.currentTime);
+
+  // Distorsione scarico
+  distNode = actx.createWaveShaper();
+  distNode.curve = createDistortionCurve(10);
+  distNode.oversample = 'none'; // massime performance MCU2
+
+  // Filtro principale scarico (apre con gli RPM)
+  lowpassFilter = actx.createBiquadFilter();
+  lowpassFilter.type = 'lowpass';
+  lowpassFilter.frequency.setValueAtTime(2500, actx.currentTime);
+  lowpassFilter.Q.setValueAtTime(1.5, actx.currentTime);
+
+  distNode.connect(lowpassFilter);
+  lowpassFilter.connect(masterGain);
+  masterGain.connect(actx.destination);
+
+  // Armoniche tipiche V12 aspirato (frequenza base f0 = RPM/60)
+  // Per un 4 tempi a 12 cilindri, l'ordine dominante e' l'ordine 6 (6 scoppi per giro motore),
+  // seguito dai suoi multipli (12, 18, 24) e da ordini meccanici (1, 2, 3, 4).
+  const harmonicProfile = [
+    { order: 1.0,  type: 'sawtooth', baseVol: 0.12, loadBonus: 0.05 },
+    { order: 2.0,  type: 'triangle', baseVol: 0.15, loadBonus: 0.05 },
+    { order: 3.0,  type: 'sawtooth', baseVol: 0.20, loadBonus: 0.10 },
+    { order: 6.0,  type: 'sawtooth', baseVol: 0.65, loadBonus: 0.50 }, // Armonica principale V12
+    { order: 12.0, type: 'sawtooth', baseVol: 0.35, loadBonus: 0.40 }, // Urlo ad alti regimi
+    { order: 18.0, type: 'triangle', baseVol: 0.15, loadBonus: 0.25 },
+    { order: 24.0, type: 'sine',     baseVol: 0.08, loadBonus: 0.20 }
+  ];
+
+  oscNodes = harmonicProfile.map(spec => {
+    const osc = actx.createOscillator();
+    osc.type = spec.type;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(spec.baseVol * 0.1, actx.currentTime);
+
+    osc.connect(g);
+    g.connect(distNode);
+    osc.start();
+    return { osc, gain: g, spec };
+  });
+
+  // Sintesi rumore aspirazione (Air intake hiss & growl)
+  const noiseBuf = buildWhiteNoiseBuffer(actx);
+  intakeNoiseNode = actx.createBufferSource();
+  intakeNoiseNode.buffer = noiseBuf;
+  intakeNoiseNode.loop = true;
+
+  intakeFilter = actx.createBiquadFilter();
+  intakeFilter.type = 'bandpass';
+  intakeFilter.frequency.setValueAtTime(450, actx.currentTime);
+  intakeFilter.Q.setValueAtTime(3.0, actx.currentTime);
+
+  intakeGain = actx.createGain();
+  intakeGain.gain.setValueAtTime(0.001, actx.currentTime);
+
+  intakeNoiseNode.connect(intakeFilter);
+  intakeFilter.connect(intakeGain);
+  intakeGain.connect(masterGain);
+  intakeNoiseNode.start();
+
+  updateSynthAudio(currentRpm, filteredThrottle, true);
+}
+
+function updateSynthAudio(rpm, load, immediate = false) {
+  if (!actx || oscNodes.length === 0) return;
+
+  const t = actx.currentTime;
+  const ramp = immediate ? 0.002 : 0.012;
+
+  // Frequenza di rotazione motore: f0 = RPM / 60
+  const f0 = rpm / 60;
+
+  // Aggiorna frequenze e ampiezze di ciascuna armonica del V12
+  oscNodes.forEach(({ osc, gain, spec }) => {
+    const targetFreq = Math.max(20, Math.min(18000, f0 * spec.order));
+    osc.frequency.setTargetAtTime(targetFreq, t, ramp);
+
+    // Con il carico aumentano le armoniche alte e l'aggressivita del timbro
+    const vol = (spec.baseVol + spec.loadBonus * load) * (0.35 + (rpm / MAX_RPM) * 0.65);
+    gain.gain.setTargetAtTime(vol, t, ramp);
+  });
+
+  // Filtro scarico: a 900 RPM taglia a ~1000Hz (cupo al minimo), a 8500 RPM apre a ~8000Hz (urlo V12)
+  const cutoff = 900 + (rpm / MAX_RPM) * 7200 + (load * 1200);
+  lowpassFilter.frequency.setTargetAtTime(Math.min(14000, cutoff), t, ramp);
+
+  // Rumore aspirazione: sale proporzionalmente a carico del gas e giri
+  const intakeFreq = 350 + (rpm / MAX_RPM) * 1200;
+  intakeFilter.frequency.setTargetAtTime(intakeFreq, t, ramp);
+  const intakeVol = (0.01 + load * 0.22) * (0.4 + (rpm / MAX_RPM) * 0.6);
+  intakeGain.gain.setTargetAtTime(intakeVol, t, ramp);
 }
 
 function registerSpeedUpdate(spd, isDirectInput = false) {
@@ -247,7 +353,7 @@ function registerSpeedUpdate(spd, isDirectInput = false) {
     if (dt > 0.01) {
       const rawAccel = (spd - lastSpeedSample) / dt;
       const rawThrottle = Math.max(0, Math.min(1, rawAccel / 15));
-      filteredThrottle += (rawThrottle - filteredThrottle) * 0.4;
+      filteredThrottle += (rawThrottle - filteredThrottle) * 0.45;
       lastSpeedSample = spd;
       lastSpeedSampleTime = now;
     }
@@ -261,7 +367,6 @@ function registerSpeedUpdate(spd, isDirectInput = false) {
 
     if (dt > 0.04) {
       const rawAccel = (spd - lastSpeedSample) / dt;
-      // Stima carico: 12 km/h al secondo (~0.34g) = 100% gas
       const rawThrottle = Math.max(0, Math.min(1, rawAccel / 12));
       const alpha = rawThrottle > filteredThrottle ? 0.45 : 0.15;
       filteredThrottle += (rawThrottle - filteredThrottle) * alpha;
@@ -272,120 +377,17 @@ function registerSpeedUpdate(spd, isDirectInput = false) {
   currentSpeed = Math.max(0, spd);
 }
 
-async function preloadSamples() {
-  try {
-    actx = createAudioContext();
-    document.getElementById('diag').textContent = 'Scaricamento audio...';
-    const fetchPromises = sampleFiles.map(async file => {
-      const res = await fetch(file);
-      if (!res.ok) throw new Error(`HTTP ${res.status} per ${file}`);
-      const arrayBuf = await res.arrayBuffer();
-      return await decodeAudioCompat(actx, arrayBuf);
-    });
-
-    audioBuffers = await Promise.all(fetchPromises);
-
-    const btn = document.getElementById('power-btn');
-    btn.disabled = false;
-    btn.textContent = 'AVVIA MOTORE';
-    updateDiagStatus();
-  } catch (err) {
-    document.getElementById('diag').textContent = 'Errore suoni: ' + err.message;
-  }
-}
-preloadSamples();
-
-function decodeAudioCompat(context, arrayBuf) {
-  return new Promise((resolve, reject) => {
-    const res = context.decodeAudioData(arrayBuf, resolve, reject);
-    if (res && typeof res.then === 'function') {
-      res.then(resolve).catch(reject);
-    }
-  });
-}
-
 function updateDiagStatus() {
   const diagEl = document.getElementById('diag');
   if (!diagEl) return;
   if (!isRunning) {
-    diagEl.textContent = 'Audio pronto in RAM. Tocca AVVIA per partire.';
+    diagEl.textContent = 'Zero file audio • Sintesi procedurale V12 in tempo reale';
     return;
   }
   const baseLat = actx && actx.baseLatency ? (actx.baseLatency * 1000).toFixed(0) : '?';
   const outLat = actx && actx.outputLatency ? (actx.outputLatency * 1000).toFixed(0) : '?';
   const hzText = gpsHzDisplay > 0 ? `${gpsHzDisplay.toFixed(1)} Hz` : 'attesa';
   diagEl.textContent = `GPS: ${hzText} | Audio buffer: ${baseLat}ms (out: ${outLat}ms) | Gas: ${(filteredThrottle * 100).toFixed(0)}%`;
-}
-
-async function initAudioGraph() {
-  if (!actx) actx = createAudioContext();
-  if (actx.state === 'suspended') await actx.resume();
-
-  if (audioBuffers.length === 0) {
-    const fetchPromises = sampleFiles.map(async file => {
-      const res = await fetch(file);
-      const arrayBuf = await res.arrayBuffer();
-      return await decodeAudioCompat(actx, arrayBuf);
-    });
-    audioBuffers = await Promise.all(fetchPromises);
-  }
-
-  masterGain = actx.createGain();
-  masterGain.gain.setValueAtTime(0.9, actx.currentTime);
-  masterGain.connect(actx.destination);
-
-  sourceNodes = [];
-  gainNodes = [];
-
-  audioBuffers.forEach(buf => {
-    const src = actx.createBufferSource();
-    src.buffer = buf;
-    src.loop = true;
-
-    const g = actx.createGain();
-    g.gain.setValueAtTime(0, actx.currentTime);
-
-    src.connect(g);
-    g.connect(masterGain);
-
-    sourceNodes.push(src);
-    gainNodes.push(g);
-    src.start();
-  });
-
-  updateAudio(currentRpm, filteredThrottle, true);
-}
-
-function updateAudio(rpm, load, immediate = false) {
-  if (!actx || sourceNodes.length === 0) return;
-
-  const t = actx.currentTime;
-  const ramp = immediate ? 0.001 : 0.008;
-
-  let lowerIdx = 0;
-  for (let i = 0; i < sampleRpmPoints.length - 1; i++) {
-    if (rpm >= sampleRpmPoints[i]) lowerIdx = i;
-  }
-  const upperIdx = Math.min(sampleRpmPoints.length - 1, lowerIdx + 1);
-
-  const lowerRpm = sampleRpmPoints[lowerIdx];
-  const upperRpm = sampleRpmPoints[upperIdx];
-  const span = Math.max(1, upperRpm - lowerRpm);
-  const factor = Math.max(0, Math.min(1, (rpm - lowerRpm) / span));
-
-  gainNodes.forEach((g, i) => {
-    let target = 0;
-    if (i === lowerIdx) target = 1 - factor;
-    else if (i === upperIdx) target = factor;
-    // Modulazione ampiezza con carico: motore sussurrato a filo di gas (0.4), pieno in affondo (1.0)
-    target = target * (0.4 + load * 0.6);
-    g.gain.setTargetAtTime(target, t, ramp);
-
-    const refRpm = sampleRpmPoints[i];
-    // Range playbackRate compatto e naturale (0.75x - 1.45x)
-    const rate = Math.max(0.75, Math.min(1.45, rpm / refRpm));
-    sourceNodes[i].playbackRate.setTargetAtTime(rate, t, ramp);
-  });
 }
 
 let lastLoopTime = performance.now();
@@ -397,18 +399,23 @@ function updatePhysics(spd) {
   if (spd < 1) {
     targetRpm = IDLE_RPM;
   } else {
-    // Crociera a gas costante: 50 km/h = 1000 RPM, 90 km/h = 1160 RPM, 130 km/h = 1320 RPM
-    // Aggiunta dinamica di carico solo sotto accelerazione: fino a +2000-3000 RPM
-    const baseCruiseRpm = IDLE_RPM + (spd / 200) * 800;
-    const loadRpm = filteredThrottle * (1200 + (spd / 200) * 1600);
-    targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, baseCruiseRpm + loadRpm));
+    // V12 Range dinamico fino a 8500 RPM:
+    // Crociera (gas sfiorato o zero):
+    // 50 km/h: ~1350 RPM
+    // 90 km/h: ~1700 RPM
+    // 130 km/h: ~2100 RPM
+    // Pieno carico (affondo gas): sale istantaneamente verso i 6500-8500 RPM
+    const cruiseRpm = IDLE_RPM + (spd / 240) * 1600;
+    const accelBonus = filteredThrottle * (2500 + (spd / 200) * 3500);
+    targetRpm = Math.max(IDLE_RPM, Math.min(MAX_RPM, cruiseRpm + accelBonus));
   }
 
-  const rpmFollowFactor = 1 - Math.exp(-dt / 0.04);
+  // Risposta giri agile e reattiva
+  const rpmFollowFactor = 1 - Math.exp(-dt / 0.038);
   currentRpm += (targetRpm - currentRpm) * rpmFollowFactor;
 
   if (isRunning) {
-    updateAudio(currentRpm, filteredThrottle);
+    updateSynthAudio(currentRpm, filteredThrottle);
   }
 
   document.getElementById('gear-badge').textContent = (spd < 1) ? 'P' : 'D';
@@ -444,35 +451,27 @@ function startGps() {
 
 const pBtn = document.getElementById('power-btn');
 pBtn.addEventListener('click', async () => {
-  if (!actx) actx = createAudioContext();
-  if (actx.state === 'suspended') await actx.resume();
+  if (!actx) {
+    initSynth();
+  }
+  if (actx.state === 'suspended') {
+    await actx.resume();
+  }
 
   if (!isRunning) {
-    pBtn.disabled = true;
-    pBtn.textContent = 'AVVIO...';
-    try {
-      await initAudioGraph();
-      startGps();
-      isRunning = true;
-      pBtn.textContent = 'SPEGNI MOTORE';
-      pBtn.classList.add('stop');
-      pBtn.disabled = false;
-      document.getElementById('diag').textContent = 'Motore in esecuzione.';
-    } catch (e) {
-      pBtn.disabled = false;
-      pBtn.textContent = 'AVVIA MOTORE';
-      document.getElementById('diag').textContent = 'Errore: ' + e.message;
-    }
+    startGps();
+    isRunning = true;
+    pBtn.textContent = 'SPEGNI V12';
+    pBtn.classList.add('stop');
+    document.getElementById('diag').textContent = 'V12 in esecuzione.';
   } else {
-    sourceNodes.forEach(s => { try { s.stop(); } catch(e){} });
-    sourceNodes = [];
-    gainNodes = [];
     if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
     isRunning = false;
     currentSpeed = 0;
-    pBtn.textContent = 'AVVIA MOTORE';
+    pBtn.textContent = 'AVVIA V12';
     pBtn.classList.remove('stop');
-    document.getElementById('diag').textContent = 'Motore spento.';
+    document.getElementById('diag').textContent = 'V12 spento.';
+    if (actx) actx.suspend();
   }
 });
 
