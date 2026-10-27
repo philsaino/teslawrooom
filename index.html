@@ -221,6 +221,7 @@ let masterGain = null;
 let idleNode = null, idleGain = null;
 let midNode = null, midGain = null;
 let highNode = null, highGain = null;
+let toneFilter = null, comfortFilter = null;
 let audioBuffers = {};
 
 function createAudioBufferFromRaw(ctx, rawEntry) {
@@ -247,9 +248,27 @@ function initAudioEngine() {
 
   masterGain = ctx.createGain();
   masterGain.gain.setValueAtTime(0.9, ctx.currentTime);
-  masterGain.connect(ctx.destination);
 
-  // 1. Idle
+  // Filtro di presenza/brillantezza reattivo al gas (highshelf a 1.5 kHz)
+  // Crociera: +2.5 dB fissi (elimina il cupo a 50/90/130 km/h)
+  // Pieno gas: fino a +9 dB per ringhio e mordente sportivo
+  toneFilter = ctx.createBiquadFilter();
+  toneFilter.type = 'highshelf';
+  toneFilter.frequency.setValueAtTime(1500, ctx.currentTime);
+  toneFilter.gain.setValueAtTime(2.5, ctx.currentTime);
+
+  // Filtro comfort anti-fatica per alte velocità/autostrada (taglia oltre 6.8 kHz)
+  comfortFilter = ctx.createBiquadFilter();
+  comfortFilter.type = 'lowpass';
+  comfortFilter.frequency.setValueAtTime(6800, ctx.currentTime);
+  comfortFilter.Q.setValueAtTime(0.7, ctx.currentTime);
+
+  // Catena audio: layer -> masterGain -> toneFilter -> comfortFilter -> destination
+  masterGain.connect(toneFilter);
+  toneFilter.connect(comfortFilter);
+  comfortFilter.connect(ctx.destination);
+
+  // 1. Idle (minimo profondo 900 RPM)
   idleGain = ctx.createGain();
   idleGain.gain.setValueAtTime(1.0, ctx.currentTime);
   idleGain.connect(masterGain);
@@ -260,7 +279,7 @@ function initAudioEngine() {
   idleNode.connect(idleGain);
   idleNode.start(0);
 
-  // 2. Mid
+  // 2. Mid (cuore di marcia e crociera 1500-4500 RPM)
   midGain = ctx.createGain();
   midGain.gain.setValueAtTime(0.0, ctx.currentTime);
   midGain.connect(masterGain);
@@ -271,7 +290,7 @@ function initAudioEngine() {
   midNode.connect(midGain);
   midNode.start(0);
 
-  // 3. High
+  // 3. High (urlo e affondo gas >4500 RPM)
   highGain = ctx.createGain();
   highGain.gain.setValueAtTime(0.0, ctx.currentTime);
   highGain.connect(masterGain);
@@ -290,40 +309,54 @@ function updateAudioEngine(rpm, load, immediate = false) {
   if (!actx || !idleNode || !midNode || !highNode) return;
 
   const t = actx.currentTime;
-  const ramp = immediate ? 0.005 : 0.025;
+  const ramp = immediate ? 0.005 : 0.035;
 
-  // Calcolo pitch-shift naturale limitato per ciascun campione
-  // Evita l'effetto chipmunk o artefatti di campionamento estremo
-  const idleRate = Math.max(0.7, Math.min(2.0, rpm / 900));
-  const midRate  = Math.max(0.6, Math.min(1.8, rpm / 3200));
-  const highRate = Math.max(0.7, Math.min(1.7, rpm / 5800));
+  // Pitch-shifting lineare calibrato sul punto neutro (1.0x) di ciascun campione:
+  // idle: 1.0x a 900 RPM
+  // mid:  1.0x a 1700 RPM (crociera perfetta 90 km/h)
+  // high: 1.0x a 4500 RPM
+  const idleRate = Math.max(0.8, Math.min(2.1, rpm / 900));
+  const midRate  = Math.max(0.7, Math.min(2.0, rpm / 1700));
+  const highRate = Math.max(0.65, Math.min(1.8, rpm / 4500));
 
   idleNode.playbackRate.setTargetAtTime(idleRate, t, ramp);
   midNode.playbackRate.setTargetAtTime(midRate, t, ramp);
   highNode.playbackRate.setTargetAtTime(highRate, t, ramp);
 
-  // Crossfade a 3 strati continuo in base a RPM e carico acceleratore
-  // Aggiunge un boost di presenza armonica quando l'acceleratore e premuto
+  // Crossfade calibrato:
+  // Fino a 1300 RPM: transizione da idle a mid
+  // Da 1300 a 4000 RPM (crociera 50-130 km/h): prevale il mid pulito e corposo
+  // Oltre 4000 RPM o a gas spalancato: entra l'high
   let wIdle = 0, wMid = 0, wHigh = 0;
 
-  if (rpm < 2200) {
-    const f = (rpm - 900) / (2200 - 900);
+  if (rpm < 1600) {
+    const f = (rpm - 900) / (1600 - 900);
     wIdle = 1 - f;
     wMid = f;
-  } else if (rpm < 5200) {
-    const f = (rpm - 2200) / (5200 - 2200);
+  } else if (rpm < 4600) {
+    const f = (rpm - 1600) / (4600 - 1600);
     wMid = 1 - f;
-    wHigh = f;
+    wHigh = f * 0.7; // high moderato in assenza di pieno gas
   } else {
     wHigh = 1.0;
   }
 
-  // Bonus volume su mid e high quando il gas e pigiato
-  const loadBoost = 1.0 + Math.max(0, Math.min(1, load)) * 0.35;
+  // Se il gas e premuto, sposta il bilanciamento verso armoniche più alte ed energiche
+  const cleanLoad = Math.max(0, Math.min(1, load));
+  if (cleanLoad > 0.15) {
+    const extraHigh = (cleanLoad - 0.15) * 0.45;
+    wHigh = Math.min(1.0, wHigh + extraHigh);
+  }
 
-  idleGain.gain.setTargetAtTime(Math.max(0, wIdle) * 0.95, t, ramp);
-  midGain.gain.setTargetAtTime(Math.max(0, wMid) * 1.05 * loadBoost, t, ramp);
-  highGain.gain.setTargetAtTime(Math.max(0, wHigh) * 1.15 * loadBoost, t, ramp);
+  idleGain.gain.setTargetAtTime(Math.max(0, wIdle) * 0.9, t, ramp);
+  midGain.gain.setTargetAtTime(Math.max(0, wMid) * 1.05, t, ramp);
+  highGain.gain.setTargetAtTime(Math.max(0, wHigh) * 1.15, t, ramp);
+
+  // Dinamica brillantezza:
+  // In crociera stabile (gas < 15%): +2.5 dB fissi (mai cupo, mai stancante)
+  // In affondo/ripresa: sale linearmente fino a +9 dB con attacco pronto
+  const toneGain = 2.5 + (cleanLoad > 0.12 ? (cleanLoad - 0.12) / 0.88 * 6.5 : 0);
+  toneFilter.gain.setTargetAtTime(toneGain, t, immediate ? 0.01 : 0.08);
 }
 
 function registerSpeedUpdate(spd, isDirectInput = false) {
