@@ -223,63 +223,92 @@ let midNode = null, midGain = null;
 let highNode = null, highGain = null;
 let audioBuffers = {};
 
+function base64ToArrayBuffer(base64) {
+  const binaryString = atob(base64.replace(/^data:audio\/\w+;base64,/, ''));
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+function decodeAudioDataSafe(ctx, arrayBuffer) {
+  return new Promise((resolve, reject) => {
+    // Gestione ibrida sia callback legacy (WebKit/Safari) che promise standard (Chromium)
+    const res = ctx.decodeAudioData(
+      arrayBuffer,
+      buf => resolve(buf),
+      err => reject(err || new Error('decodeAudioData failed'))
+    );
+    if (res && typeof res.then === 'function') {
+      res.then(resolve).catch(reject);
+    }
+  });
+}
+
 async function loadSampleBuffer(ctx, base64Data) {
-  const res = await fetch(base64Data);
-  const ab = await res.arrayBuffer();
-  return await ctx.decodeAudioData(ab);
+  const ab = base64ToArrayBuffer(base64Data);
+  return await decodeAudioDataSafe(ctx, ab);
 }
 
 async function initAudioEngine() {
   const AC = window.AudioContext || window.webkitAudioContext;
-  actx = new AC({ latencyHint: 'interactive' });
+  if (!AC) throw new Error('Web Audio non supportato');
+  
+  const ctx = new AC({ latencyHint: 'interactive' });
+  if (ctx.state === 'suspended') {
+    await ctx.resume();
+  }
 
-  masterGain = actx.createGain();
-  masterGain.gain.setValueAtTime(0.9, actx.currentTime);
-  masterGain.connect(actx.destination);
-
-  // Caricamento simultaneo dei 3 campioni audio reali (OpenGameArt CC0)
+  // Caricamento parallelo dai dati base64 sincroni (zero fetch di rete)
   const [bIdle, bMid, bHigh] = await Promise.all([
-    loadSampleBuffer(actx, ENGINE_SAMPLES.idle),
-    loadSampleBuffer(actx, ENGINE_SAMPLES.mid),
-    loadSampleBuffer(actx, ENGINE_SAMPLES.high)
+    loadSampleBuffer(ctx, ENGINE_SAMPLES.idle),
+    loadSampleBuffer(ctx, ENGINE_SAMPLES.mid),
+    loadSampleBuffer(ctx, ENGINE_SAMPLES.high)
   ]);
   audioBuffers.idle = bIdle;
   audioBuffers.mid = bMid;
   audioBuffers.high = bHigh;
 
-  // 1. Idle (minimo ~900 RPM, frequenza base ~43Hz)
-  idleGain = actx.createGain();
-  idleGain.gain.setValueAtTime(1.0, actx.currentTime);
+  masterGain = ctx.createGain();
+  masterGain.gain.setValueAtTime(0.9, ctx.currentTime);
+  masterGain.connect(ctx.destination);
+
+  // 1. Idle
+  idleGain = ctx.createGain();
+  idleGain.gain.setValueAtTime(1.0, ctx.currentTime);
   idleGain.connect(masterGain);
-  idleNode = actx.createBufferSource();
+  idleNode = ctx.createBufferSource();
   idleNode.buffer = audioBuffers.idle;
   idleNode.loop = true;
-  idleNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
+  idleNode.playbackRate.setValueAtTime(1.0, ctx.currentTime);
   idleNode.connect(idleGain);
   idleNode.start();
 
-  // 2. Mid (~2500 - 4500 RPM, frequenza base ~65Hz)
-  midGain = actx.createGain();
-  midGain.gain.setValueAtTime(0.0, actx.currentTime);
+  // 2. Mid
+  midGain = ctx.createGain();
+  midGain.gain.setValueAtTime(0.0, ctx.currentTime);
   midGain.connect(masterGain);
-  midNode = actx.createBufferSource();
+  midNode = ctx.createBufferSource();
   midNode.buffer = audioBuffers.mid;
   midNode.loop = true;
-  midNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
+  midNode.playbackRate.setValueAtTime(1.0, ctx.currentTime);
   midNode.connect(midGain);
   midNode.start();
 
-  // 3. High (> 5000 RPM, frequenza base ~76Hz)
-  highGain = actx.createGain();
-  highGain.gain.setValueAtTime(0.0, actx.currentTime);
+  // 3. High
+  highGain = ctx.createGain();
+  highGain.gain.setValueAtTime(0.0, ctx.currentTime);
   highGain.connect(masterGain);
-  highNode = actx.createBufferSource();
+  highNode = ctx.createBufferSource();
   highNode.buffer = audioBuffers.high;
   highNode.loop = true;
-  highNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
+  highNode.playbackRate.setValueAtTime(1.0, ctx.currentTime);
   highNode.connect(highGain);
   highNode.start();
 
+  actx = ctx;
   updateAudioEngine(currentRpm, filteredThrottle, true);
 }
 
@@ -429,28 +458,34 @@ function startGps() {
 
 const pBtn = document.getElementById('power-btn');
 pBtn.addEventListener('click', async () => {
-  if (!actx) {
-    pBtn.textContent = 'CARICAMENTO...';
-    await initAudioEngine();
-  }
-  if (actx.state === 'suspended') {
-    await actx.resume();
-  }
+  try {
+    if (!actx) {
+      pBtn.textContent = 'CARICAMENTO...';
+      await initAudioEngine();
+    }
+    if (actx && actx.state === 'suspended') {
+      await actx.resume();
+    }
 
-  if (!isRunning) {
-    startGps();
-    isRunning = true;
-    pBtn.textContent = 'SPEGNI MOTORE';
-    pBtn.classList.add('stop');
-    document.getElementById('diag').textContent = 'Motore in esecuzione.';
-  } else {
-    if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
-    isRunning = false;
-    currentSpeed = 0;
+    if (!isRunning) {
+      startGps();
+      isRunning = true;
+      pBtn.textContent = 'SPEGNI MOTORE';
+      pBtn.classList.add('stop');
+      document.getElementById('diag').textContent = 'Motore in esecuzione.';
+    } else {
+      if (geoWatchId) navigator.geolocation.clearWatch(geoWatchId);
+      isRunning = false;
+      currentSpeed = 0;
+      pBtn.textContent = 'AVVIA MOTORE';
+      pBtn.classList.remove('stop');
+      document.getElementById('diag').textContent = 'Motore spento.';
+      if (actx) actx.suspend();
+    }
+  } catch (err) {
     pBtn.textContent = 'AVVIA MOTORE';
     pBtn.classList.remove('stop');
-    document.getElementById('diag').textContent = 'Motore spento.';
-    if (actx) actx.suspend();
+    document.getElementById('diag').textContent = `ERRORE AUDIO: ${err.message || err}`;
   }
 });
 
