@@ -197,7 +197,7 @@ header{
     <span id="sim-spd" style="min-width:65px">0 km/h</span>
   </div>
 
-  <div class="status-line" id="diag">Doppio loop campionato (Idle/Drive) • Campioni reali PCM</div>
+  <div class="status-line" id="diag">Motore multi-strato 3 bande (OpenGameArt CC0) • Idle/Mid/High</div>
   <a href="probe.html" class="probe-link">Apri Test Sensori Tesla (probe.html)</a>
 </div>
 
@@ -216,11 +216,11 @@ let gpsSampleCount = 0;
 let lastGpsSampleTimestamp = 0;
 let gpsHzDisplay = 0;
 
-// Motore audio a campioni reali (PCM single-cycle/loops)
+// Motore audio a 3 bande campionate reali (Idle, Mid, High RPM)
 let masterGain = null;
 let idleNode = null, idleGain = null;
-let driveNode = null, driveGain = null;
-let subGain = null, subFilter = null, lowSubNode = null;
+let midNode = null, midGain = null;
+let highNode = null, highGain = null;
 let audioBuffers = {};
 
 async function loadSampleBuffer(ctx, base64Data) {
@@ -234,22 +234,23 @@ async function initAudioEngine() {
   actx = new AC({ latencyHint: 'interactive' });
 
   masterGain = actx.createGain();
-  masterGain.gain.setValueAtTime(0.85, actx.currentTime);
+  masterGain.gain.setValueAtTime(0.9, actx.currentTime);
   masterGain.connect(actx.destination);
 
-  // Caricamento parallelo dei sample incorporati
-  const [bIdle, bDrive] = await Promise.all([
-    loadSampleBuffer(actx, ENGINE_SAMPLES.v8_idle),
-    loadSampleBuffer(actx, ENGINE_SAMPLES.v8_drive)
+  // Caricamento simultaneo dei 3 campioni audio reali (OpenGameArt CC0)
+  const [bIdle, bMid, bHigh] = await Promise.all([
+    loadSampleBuffer(actx, ENGINE_SAMPLES.idle),
+    loadSampleBuffer(actx, ENGINE_SAMPLES.mid),
+    loadSampleBuffer(actx, ENGINE_SAMPLES.high)
   ]);
   audioBuffers.idle = bIdle;
-  audioBuffers.drive = bDrive;
+  audioBuffers.mid = bMid;
+  audioBuffers.high = bHigh;
 
-  // Nodo Idle (minimo con bassi caldi e pulsazioni reali)
+  // 1. Idle (minimo ~900 RPM, frequenza base ~43Hz)
   idleGain = actx.createGain();
   idleGain.gain.setValueAtTime(1.0, actx.currentTime);
   idleGain.connect(masterGain);
-
   idleNode = actx.createBufferSource();
   idleNode.buffer = audioBuffers.idle;
   idleNode.loop = true;
@@ -257,42 +258,69 @@ async function initAudioEngine() {
   idleNode.connect(idleGain);
   idleNode.start();
 
-  // Nodo Drive (carico e accelerazione corposa)
-  driveGain = actx.createGain();
-  driveGain.gain.setValueAtTime(0.0, actx.currentTime);
-  driveGain.connect(masterGain);
+  // 2. Mid (~2500 - 4500 RPM, frequenza base ~65Hz)
+  midGain = actx.createGain();
+  midGain.gain.setValueAtTime(0.0, actx.currentTime);
+  midGain.connect(masterGain);
+  midNode = actx.createBufferSource();
+  midNode.buffer = audioBuffers.mid;
+  midNode.loop = true;
+  midNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
+  midNode.connect(midGain);
+  midNode.start();
 
-  driveNode = actx.createBufferSource();
-  driveNode.buffer = audioBuffers.drive;
-  driveNode.loop = true;
-  driveNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
-  driveNode.connect(driveGain);
-  driveNode.start();
+  // 3. High (> 5000 RPM, frequenza base ~76Hz)
+  highGain = actx.createGain();
+  highGain.gain.setValueAtTime(0.0, actx.currentTime);
+  highGain.connect(masterGain);
+  highNode = actx.createBufferSource();
+  highNode.buffer = audioBuffers.high;
+  highNode.loop = true;
+  highNode.playbackRate.setValueAtTime(1.0, actx.currentTime);
+  highNode.connect(highGain);
+  highNode.start();
 
   updateAudioEngine(currentRpm, filteredThrottle, true);
 }
 
 function updateAudioEngine(rpm, load, immediate = false) {
-  if (!actx || !idleNode || !driveNode) return;
+  if (!actx || !idleNode || !midNode || !highNode) return;
 
   const t = actx.currentTime;
   const ramp = immediate ? 0.005 : 0.025;
 
-  // Base rate a 900 RPM: 1.0x
-  // Pitch scala in base agli RPM
-  const pitchFactor = Math.max(0.6, Math.min(3.8, rpm / IDLE_RPM));
-  idleNode.playbackRate.setTargetAtTime(pitchFactor, t, ramp);
-  driveNode.playbackRate.setTargetAtTime(pitchFactor, t, ramp);
+  // Calcolo pitch-shift naturale limitato per ciascun campione
+  // Evita l'effetto chipmunk o artefatti di campionamento estremo
+  const idleRate = Math.max(0.7, Math.min(2.0, rpm / 900));
+  const midRate  = Math.max(0.6, Math.min(1.8, rpm / 3200));
+  const highRate = Math.max(0.7, Math.min(1.7, rpm / 5800));
 
-  // Crossfade intelligente:
-  // Al minimo o decelerazione (load basso): prevale idleNode (suono profondo e borbottante)
-  // Sotto gas/carico: entra driveNode con punch ed enfasi di scoppio
-  const loadClamped = Math.max(0, Math.min(1, load));
-  const driveMix = Math.min(1, Math.max(0, (loadClamped * 1.4) + (rpm - IDLE_RPM) / 4500));
-  const idleMix = Math.max(0.15, 1.0 - driveMix * 0.85);
+  idleNode.playbackRate.setTargetAtTime(idleRate, t, ramp);
+  midNode.playbackRate.setTargetAtTime(midRate, t, ramp);
+  highNode.playbackRate.setTargetAtTime(highRate, t, ramp);
 
-  idleGain.gain.setTargetAtTime(idleMix * 0.9, t, ramp);
-  driveGain.gain.setTargetAtTime(driveMix * 1.1, t, ramp);
+  // Crossfade a 3 strati continuo in base a RPM e carico acceleratore
+  // Aggiunge un boost di presenza armonica quando l'acceleratore e premuto
+  let wIdle = 0, wMid = 0, wHigh = 0;
+
+  if (rpm < 2200) {
+    const f = (rpm - 900) / (2200 - 900);
+    wIdle = 1 - f;
+    wMid = f;
+  } else if (rpm < 5200) {
+    const f = (rpm - 2200) / (5200 - 2200);
+    wMid = 1 - f;
+    wHigh = f;
+  } else {
+    wHigh = 1.0;
+  }
+
+  // Bonus volume su mid e high quando il gas e pigiato
+  const loadBoost = 1.0 + Math.max(0, Math.min(1, load)) * 0.35;
+
+  idleGain.gain.setTargetAtTime(Math.max(0, wIdle) * 0.95, t, ramp);
+  midGain.gain.setTargetAtTime(Math.max(0, wMid) * 1.05 * loadBoost, t, ramp);
+  highGain.gain.setTargetAtTime(Math.max(0, wHigh) * 1.15 * loadBoost, t, ramp);
 }
 
 function registerSpeedUpdate(spd, isDirectInput = false) {
@@ -331,7 +359,7 @@ function updateDiagStatus() {
   const diagEl = document.getElementById('diag');
   if (!diagEl) return;
   if (!isRunning) {
-    diagEl.textContent = 'Doppio loop campionato (Idle/Drive) • Campioni reali PCM';
+    diagEl.textContent = 'Motore multi-strato 3 bande (OpenGameArt CC0) • Idle/Mid/High';
     return;
   }
   const baseLat = actx && actx.baseLatency ? (actx.baseLatency * 1000).toFixed(0) : '?';
